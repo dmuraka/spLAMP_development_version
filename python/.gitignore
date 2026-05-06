@@ -1,0 +1,42 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+wheels/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# Environments
+.venv/
+venv/
+env/
+.python-version
+
+# Test / coverage / typing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# IDEs and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local benchmark / scratch artifacts
+bench_py.csv
+bench_r.csv
+data_n*.csv
+data_rf.csv
+compare_*_out.csv
+_idtrain*.csv

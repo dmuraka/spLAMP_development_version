@@ -1,0 +1,250 @@
+---
+title: "Coarse-to-fine spatial GLMM: Application examples"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{spCF_glm}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+references:
+  - id: murakami2026cfsm-glm
+    type: report
+    author:
+      - family: Murakami
+        given: Daisuke
+      - family: Comber
+        given: Alexis
+      - family: Yoshida
+        given: Takahiro
+      - family: Tsutsumida
+        given: Narumasa
+      - family: Brunsdon
+        given: Chris      
+      - family: Nakaya
+        given: Tomoki    
+    title: "Coarse-to-fine spatial GLMM for scalable prediction and multiscale analysis"
+    issued:
+      year: 2026
+    archive: ArXiv
+---
+
+```{=html}
+<style>
+figure, img {
+  border: none !important;
+  box-shadow: none !important;
+}
+</style>
+```
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+This vignette demonstrates how to estimate spatial generalized linear mixed models (GLMMs) using the spCF package for smoothing/denoising, prediction, and multiscale analysis. The spatial process in the GLMMs is trained via a coarse-to-fine approach that sequentially learns spatial patterns from coarser to finer scales. This spatial GLMM framework is particularly suitable for moderate-to-large samples. See @murakami2026cfsm-glm for further details.
+
+# Example 1: Count data modeling for disease mapping
+
+## Data and setup
+
+Let us load the required packages
+
+```{r setup}
+library(spCF)
+library(sf)
+library(CARBayesdata)
+```
+
+The *pollutionhealthdata* dataset included in the *CARBayesdata* package is used here. This dataset comprises panel data on respiratory hospitalisations across 271 zones in Greater Glasgow. For simplicity, the center coordinates of each zone are used for spatial modeling.
+
+In this example, the observed number of hospitalisations in 2011 (observed) is modeled for smoothing and predicting the latent risk of respiratory disease (i.e., disease mapping).
+
+```{r}
+data(pollutionhealthdata)
+dat      <- pollutionhealthdata[pollutionhealthdata$year==2011,]
+```
+
+The response variable (observed), covariates (pm10, jsa, price), and an offset variable (expected) are specified as follows:
+
+```{r}
+y        <- dat[,"observed"]             # count data
+x        <- dat[,c("pm10","jsa","price")]# covariates
+offset   <- log(dat[,"expected"])        # offset variable
+```
+
+The center coordinates are extracted as:
+
+```{r}
+data(GGHB.IZ)                            # polygons of the 271 zones
+coords   <- st_coordinates(st_centroid(GGHB.IZ))# coordinates
+```
+
+observed is spatially plotted as follows:
+
+```{r, fig.width=4.5, fig.height=4}
+GGHB.IZ$y <- y
+plot(GGHB.IZ[,"y"],lwd=0.01,axes=TRUE, key.pos=4,nbreaks=50)
+```
+
+## Coarse-to-fine spatial GLMM (CF-GLM)
+
+In CF-GLM, the spatial process is defined as a sum of scalewise processes, where the number of spatial scales, R, is optimized via holdout validation.
+A smaller R, corresponding to early stopping, allows the spatial process to capture only coarse-scale patterns, whereas a larger R enables the spatial process to represent finer-scale patterns. The `cf_glm_hv` function performs holdout validation as follows:
+
+```{r}
+mod_hv   <- cf_glm_hv(y = y, x = x, offset=offset, 
+                      coords = coords, family=poisson())
+```
+
+As shown in the output, the deviance loss for the validation samples gradually decreases as learning proceeds from the coarsest scale (Scale 1) to finer scales.
+
+After holdout validation, the full model is trained using the `cf_glm` function:
+
+```{r}
+mod      <- cf_glm(y = y, x = x, offset=offset, 
+                   coords = coords, mod_hv = mod_hv)
+```
+
+The estimated regression coefficients, standard deviations of the scalewise components, and error statistics are displayed as follows:
+
+```{r}
+mod
+```
+
+## Disease mapping
+
+### Predictive values
+
+The predictive means, representing the denoised risk of respiratory disease, and their standard deviations (SDs) are mapped as follows:
+
+```{r, fig.height=4, fig.width=4.5}
+# Predictive mean
+GGHB.IZ$pred   <- mod$pred$pred
+plot(GGHB.IZ[,c("pred")],lwd=0.01,axes=TRUE, key.pos=4,nbreaks=50)
+
+# Predictive SD
+GGHB.IZ$pred_sd<- mod$pred$pred_sd
+plot(GGHB.IZ[,c("pred_sd")],pal = hcl.colors(9, "Viridis"), lwd=0.01, 
+     axes=TRUE, key.pos=4)
+```
+
+The result suggests that both disease risk and their uncertainty increase in the central area.
+
+### Multiscale spatial pattern/feature extraction
+
+The `sp_scalewise` function extracts scalewise spatial processes with bandwidth values falling within a pre-specified range. For example, the following commands extract the large- and small-scale processes, corresponding to bandwidth ranges of 4000+ and 0–4000, respectively.
+
+```{r}
+mod_s1      <- sp_scalewise(mod,bw_range=c(4000,Inf)) # Large scale (4000 <= bandwidth)
+mod_s2      <- sp_scalewise(mod,bw_range=c(0,4000))   # Small scale (bandwidth <= 4000)
+```
+
+The extracted scalewise processes are mapped as follows:
+
+```{r, fig.height=3.5, fig.width=7.5}
+GGHB.IZ$z1  <- mod_s1$pred$pred
+GGHB.IZ$z2  <- mod_s2$pred$pred
+plot(GGHB.IZ[,c("z1","z2")],lwd=0.01,axes=TRUE,key.pos=4, nbreaks=50)
+```
+
+The `sp_scalewise` function is useful for multiscale spatial pattern analysis (or feature extraction), which is commonly conducted in ecological, epidemiological, and environmental studies.
+
+
+# Example 2: Binary data modeling and prediction
+
+## Data and setup
+
+Let us load the required packages
+
+```{r}
+library(spCF)
+library(sp)
+library(sf)
+```
+
+The *meuse* dataset from the *sp* package consists of observations at 155 sample sites in a floodplain along the River Meuse. In this example, we consider a binary response variable (`flood`), which takes the value 1 if the flooding frequency class is once every two years (i.e., flood-prone area) and 0 otherwise. The binary response is predicted over 3,103 regularly spaced grid cells (*meuse.grid*). The covariate considered is the distance to the river (`dist`).
+
+```{r}
+### Data at samples sites
+data(meuse)
+flood    <- ifelse(meuse$ffreq==1, 1, 0 )# Binary response variable
+coords   <- meuse[,c("x","y")]           # Coordinates
+x        <- meuse[,"dist"]               # Covariate
+
+### Data at prediction sites
+data(meuse.grid)
+coords0  <- meuse.grid[,c("x","y")]      # Coordinates
+x0       <- meuse.grid[,"dist"]          # Covariate
+```
+
+`flood` is spatially plotted as follows:
+
+```{r, fig.width=4.5, fig.height=4}
+obs_s    <- st_as_sf( data.frame(coords, flood), coords= c("x","y"), crs=28992)
+plot(obs_s[,"flood"], pch = 20, key.pos=4, axes=TRUE)
+```
+
+## Coarse-to-fine spatial GLMM (CF-GLM)
+
+The code implementing the CF-GLM is essentially the same as in the previous example, except that `family` is set to `binomial()` for modeling binary data:
+
+```{r}
+set.seed(1234) # For this vignette, training samples are fixed
+mod_hv   <- cf_glm_hv(y = flood, x = x, coords = coords, family=binomial())
+```
+
+In the subsequent full model training using the `cf_glm` function, the covariates (`x0`) and coordinates (`coords0`) at the prediction sites are also specified to enable spatial prediction:
+
+```{r}
+mod      <- cf_glm(y = flood, x=x, coords = coords, 
+                   x0=x0, coords0 = coords0, mod_hv = mod_hv)
+```
+
+The estimated regression coefficients, standard deviations of the scalewise components, and error statistics are displayed as follows:
+
+```{r}
+mod
+```
+
+## Mapping
+
+### Predictive values
+
+The predictive values and their standard deviations at the grid cells are mapped as follows:
+
+```{r, fig.height=4, fig.width=4.5}
+### Convert gridded points to gridded polygons (for clear visualization)
+meuse.grid_sp             <- meuse.grid
+coordinates(meuse.grid_sp)<- c("x", "y")
+gridded(meuse.grid_sp)    <- TRUE
+meuse.grid_sf             <- st_as_sf(as(meuse.grid_sp, "SpatialPolygons"))
+st_crs(meuse.grid_sf)     <- 28992
+
+### Mapping predictive mean and standard deviations
+meuse.grid_sf$pred        <- mod$pred0$pred   # Predictive mean
+meuse.grid_sf$pred_sd     <- mod$pred0$pred_sd# Predictive standard deviations
+plot(meuse.grid_sf[,"pred"], border = NA, nbreaks = 20, key.pos=4,axes=TRUE)
+plot(meuse.grid_sf[,"pred_sd"], pal = hcl.colors(9, "Viridis"),
+     border = NA,key.pos=4,axes=TRUE)
+```
+
+### Multiscale spatial pattern/feature extraction
+
+Let us extract the large- and small-scale processes, corresponding to bandwidth ranges of 1000+ and 0–1000, respectively.
+
+```{r}
+mod_s1<- sp_scalewise(mod,bw_range=c(1000,Inf)) # Large scale (1000 <= bandwidth)
+mod_s2<- sp_scalewise(mod,bw_range=c(0,1000))   # Small scale (0 <= bandwidth <= 1000)
+```
+
+The extracted scalewise processes are mapped as follows:
+
+```{r, fig.height=3.5, fig.width=7.5}
+meuse.grid_sf$z1    <- mod_s1$pred0$pred
+meuse.grid_sf$z2    <- mod_s2$pred0$pred
+plot(meuse.grid_sf[,c("z1","z2")], border=NA, nbreaks=20, key.pos=4, axes=TRUE)
+```
+
+### Reference

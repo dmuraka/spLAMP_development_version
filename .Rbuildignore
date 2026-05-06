@@ -1,0 +1,17 @@
+# Existing exclusions (RStudio / shell / OS / editor scratch)
+^spCF\.Rproj$
+^\.Rproj\.user$
+^\.Rhistory$
+^\.DS_Store$
+^\.positai$
+^\.claude$
+
+# Polyglot repo: Python port and benchmark scripts live alongside the R
+# source but must not be bundled into the R package tarball.
+^python$
+
+# Repository-level files that GitHub adds but that R CMD check warns about
+# as non-standard package contents.
+^LICENSE$
+^\.gitignore$
+^\.github$

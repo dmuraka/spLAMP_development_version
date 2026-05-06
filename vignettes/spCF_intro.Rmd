@@ -1,0 +1,171 @@
+---
+title: "Coarse-to-fine spatial modeling (CFSM) using the spCF package"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{spCF_lm}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+references:
+  - id: murakami2025cfsm
+    type: article-journal
+    author:
+      - family: Murakami
+        given: Daisuke
+      - family: Comber
+        given: Alexis
+      - family: Yoshida
+        given: Takahiro
+      - family: Tsutsumida
+        given: Narumasa
+      - family: Brunsdon
+        given: Chris 
+      - family: Nakaya
+        given: Tomoki    
+    title: "Coarse-to-fine spatial modeling: A scalable, machine-learning-compatible framework"
+    container-title: Geographical Analysis
+    issued:
+      year: 2026
+    volume: 58
+    issue: 2
+    page: e70034
+---
+
+```{=html}
+<style>
+figure, img {
+  border: none !important;
+  box-shadow: none !important;
+}
+</style>
+```
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+This vignette introduces spatial prediction, multiscale pattern extraction, and uncertainty quantification using the spCF package. Throughout the vignette, we employ the coarse-to-fine spatial modeling (CFSM) framework. CFSM sequentially learns spatial patterns from coarser to finer scales and terminates the learning process when the validation score no longer improves. CFSM is especially suitable for moderate-to-large samples. See @murakami2025cfsm for further details.
+
+## Data and setup
+
+Let us load the required packages
+
+```{r setup}
+library(spCF)
+library(sp)
+library(sf)
+```
+
+The *meuse* dataset included in the *sp* package is used in this vignette. This dataset comprises measurements of heavy metal concentrations in topsoil collected from a floodplain along the River Meuse, along with several covariates. In this example, zinc concentrations observed at 155 sample sites are used to predict concentrations over 3,103 regularly spaced grid cells.
+
+The response variable is the logarithm of zinc concentration. The covariates include the distance to the river and dummy variables indicating flood frequency (ffreq2 and ffreq3):
+
+```{r}
+### Data at samples sites
+data(meuse)
+y        <- log(meuse[,"zinc"])     # Response variable
+coords   <- meuse[,c("x","y")]      # Coordinates
+x        <- data.frame(dist   = meuse[,"dist"],
+                       ffreq2 = as.integer(meuse$ffreq == 2),
+                       ffreq3 = as.integer(meuse$ffreq == 3)) # Covariates
+
+### Data at prediction sites
+data(meuse.grid)
+coords0  <- meuse.grid[,c("x","y")] # Coordinates
+x0       <- data.frame(dist   = meuse.grid[,"dist"],
+                       ffreq2 = as.integer(meuse.grid$ffreq == 2),
+                       ffreq3 = as.integer(meuse.grid$ffreq == 3)) # Covariates
+```
+
+Zinc concentration is spatially plotted as follows:
+
+```{r, fig.width=4.5, fig.height=4}
+obs_s    <- st_as_sf( data.frame(coords, zinc=y), coords= c("x","y"), crs=28992)
+plot(obs_s[,"zinc"], cex=0.6,pch = 20, nbreaks = 20, key.pos=4, axes=TRUE)
+```
+
+## Coarse-to-fine spatial modeling
+
+In CFSM, the number of spatial scales, R, is optimized through holdout validation. A smaller R, corresponding to early stopping, allows the spatial process to capture only coarse-scale patterns, whereas a larger R enables the spatial process to represent finer-scale patterns. The `cf_lm_hv` function performs holdout validation as follows:
+
+```{r}
+mod_hv   <- cf_lm_hv(y = y, x = x, coords = coords)
+```
+
+In this example, 75% of the samples are randomly selected for training, and the remaining samples are used for validation (`train_rat = 0.75`). Alternatively, the training samples can be specified explicitly using the `id_train` argument. As shown in the output, the sum-of-squares error (SSE) for the validation samples gradually decreases as learning proceeds from the coarsest scale (Scale 1) to the finest scale (Scale 21 in this case).
+
+Optionally, an additional learning can be applied to further reduce the validation SSE. Currently, only random forest is available; it is implemented by specifying `add_learn = "rf"` in the `cf_lm_hv` function, to capture non-linear patterns and higher-order interactions among covariates and spatial coordinates.
+
+After holdout validation, the full model is trained using the `cf_lm` function:
+
+```{r}
+mod      <- cf_lm(y = y, x = x, x0 = x0, coords = coords, coords0 = coords0, mod_hv = mod_hv)
+```
+
+In addition to the covariates `x` and spatial coordinates `coords` at the sample sites, the corresponding covariates (`x0`) and coordinates (`coords0`) at the prediction sites are also specified to enable spatial prediction.
+
+The estimated regression coefficients, standard deviations of the scale-wise spatial processes, and error statistics are displayed as follows:
+
+```{r}
+mod
+```
+
+## Mapping
+
+### Predictive values
+
+The predictive values and their standard deviations at the grid cells are mapped as follows:
+
+```{r, fig.height=4, fig.width=4.5}
+### Convert gridded points to gridded polygons (for clear visualization)
+meuse.grid_sp             <- meuse.grid
+coordinates(meuse.grid_sp)<- c("x", "y")
+gridded(meuse.grid_sp)    <- TRUE
+meuse.grid_sf             <- st_as_sf(as(meuse.grid_sp, "SpatialPolygons"))
+st_crs(meuse.grid_sf)     <- 28992
+
+### Mapping predictive mean and standard deviations
+meuse.grid_sf$pred        <- mod$pred0$pred   # Predictive mean
+meuse.grid_sf$pred_sd     <- mod$pred0$pred_sd# Predictive standard deviations
+plot(meuse.grid_sf[,"pred"], border = NA, nbreaks = 20, key.pos=4,axes=TRUE)
+plot(meuse.grid_sf[,"pred_sd"], pal = hcl.colors(9, "Viridis"), border = NA, 
+     nbreaks = 9, key.pos = 4,axes = TRUE)
+```
+
+As expected, the standard deviation, which quantifies prediction uncertainty, increases in the east-central region where sample sites are relatively sparse.
+
+### Multiscale spatial pattern/feature extraction
+
+The `sp_scalewise` function extracts scalewise spatial processes with bandwidth values falling within a pre-specified range. For example, the following commands extract the large-, moderate-, and small-scale processes, corresponding to bandwidth ranges of 1000+, 500–1000, and 0–500, respectively.
+
+```{r}
+mod_s1<- sp_scalewise(mod,bw_range=c(1000,Inf)) # Large scale (1000 <= bandwidth)
+mod_s2<- sp_scalewise(mod,bw_range=c(500,1000)) # Moderate scale (500 <= bandwidth < 1000)
+mod_s3<- sp_scalewise(mod,bw_range=c(0,500))    # Small scale (bandwidth < 500)
+```
+
+The extracted scalewise processes are mapped as follows:
+
+```{r, fig.height=3.5, fig.width=7.5}
+meuse.grid_sf$z1    <- mod_s1$pred0$pred   # Large-scale process
+meuse.grid_sf$z2    <- mod_s2$pred0$pred   # Moderate-scale process
+meuse.grid_sf$z3    <- mod_s3$pred0$pred   # Small-scale process
+plot(meuse.grid_sf[,c("z1","z2","z3")],border = NA,key.pos=4,nbreaks=40,axes=TRUE)
+```
+
+Their standard deviations are displayed as follows:
+
+```{r, fig.height=3.5, fig.width=7.5}
+meuse.grid_sf$z1_sd <- mod_s1$pred0$pred_sd   # Large-scale process
+meuse.grid_sf$z2_sd <- mod_s2$pred0$pred_sd   # Moderate-scale process
+meuse.grid_sf$z3_sd <- mod_s3$pred0$pred_sd   # Small-scale process
+plot(meuse.grid_sf[,c("z1_sd","z2_sd","z3_sd")],
+     pal = function(n) hcl.colors(n, "Viridis"),
+     border = NA,key.pos=4,axes=TRUE)
+```
+
+The `sp_scalewise` function is useful for multiscale spatial pattern analysis (or feature extraction), which is commonly conducted in ecological, epidemiological, and environmental studies.
+
+### Reference

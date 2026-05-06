@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spCF"
+version = "0.1.1"
+description = "Coarse-to-fine spatial modeling (Python port of R package spCF)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-2.0-or-later" }
+authors = [
+    { name = "Daisuke Murakami", email = "dmuraka@ism.ac.jp" },
+    { name = "Alexis Comber" },
+    { name = "Takahiro Yoshida" },
+    { name = "Narumasa Tsutsumida" },
+    { name = "Chris Brunsdon" },
+    { name = "Tomoki Nakaya" },
+]
+keywords = ["spatial-statistics", "geostatistics", "spatial-regression", "kriging", "machine-learning"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "scikit-learn>=1.0",
+    "statsmodels>=0.13",
+    "quantile-forest>=1.3",
+]
+
+[project.optional-dependencies]
+fast = ["numba>=0.56"]
+nlopt = ["nlopt>=2.7"]
+test = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "numba>=0.56", "nlopt>=2.7"]
+
+[project.urls]
+Homepage = "https://github.com/dmuraka/spCF"
+Reference = "https://onlinelibrary.wiley.com/doi/10.1111/gean.70034"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["spCF*"]

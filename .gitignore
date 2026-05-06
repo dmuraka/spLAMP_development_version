@@ -1,0 +1,40 @@
+# OS / editor scratch
+.DS_Store
+Thumbs.db
+*~
+.vscode/
+.idea/
+
+# RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+.Rapp.history
+
+# R build / package artifacts
+*.o
+*.so
+*.dll
+*.dylib
+*.tar.gz
+*.Rcheck/
+src/*.o
+src/*.so
+src/*.dll
+
+# Python build / cache (mirrors python/.gitignore for safety)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local benchmark / scratch
+bench_py.csv
+bench_r.csv
+data_n*.csv
+data_rf.csv
+compare_*_out.csv
+_idtrain*.csv
