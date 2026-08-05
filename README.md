@@ -21,6 +21,7 @@ Key features:
 - **Dynamic spatio-temporal modeling** (`cf_dglm`) designed to scale efficiently to large spatio-temporal datasets.
 - **Spatial downscaling** (`cf_downscale`) that disaggregates aggregate-level
   responses to a finer grid under a pycnophylactic (mass-preserving) constraint.
+- **Multiscale spatial feature extraction** (`sp_multiscale`) from the estimated spatial process based on user-specified bandwidth ranges.
 - Optional **add-learn** with **random forest** or **LightGBM** that captures
   nonlinearities the linear part cannot absorb, with quantile-based predictive
   intervals (`cf_lm` only).
