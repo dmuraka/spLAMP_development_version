@@ -1,7 +1,7 @@
-# spCF — Coarse-to-Fine Spatial Modeling
+# spCF — Coarse-to-Fine Spatial and Spatio-Temporal Modeling
 
-A scalable, machine-learning–compatible framework for spatial regression,
-prediction, and uncertainty quantification on moderate-to-large samples.
+A scalable, covariance-free framework for spatial and spatio-temporal regression, 
+prediction, and uncertainty quantification for moderate to large datasets.
 Available as **both an R package and a Python package** sharing the same
 algorithm and reference implementation.
 
@@ -9,27 +9,23 @@ algorithm and reference implementation.
 
 Given response `y`, covariates `x`, and 2-D coordinates, spCF jointly fits a
 linear / GLM regression and a multiscale spatial process. Holdout validation
-selects the spatial scales adaptively, and the fit produces predictive means
-and standard deviations at sample and unseen sites. A scale-wise
+selects the spatial scales adaptively, and the fit produces predictive means and 
+standard deviations at observed and unobserved locations. A scale-wise
 decomposition (`sp_scalewise`) lets you isolate large-, medium-, and
 small-scale spatial structure for interpretation.
 
 Key features:
 
-- Coarse-to-fine bandwidth search that is scalable for large samples.
+- **Gaussian spatial modeling** (`cf_lm`) with scalable coarse-to-fine process modeling for large datasets.
+- **Spatial generalized linear mixed modeling** (`cf_glm`) supporting Gaussian, Poisson, binomial, and Gamma families, as well as quasi-likelihood families in R.
+- **Dynamic spatio-temporal modeling** (`cf_dglm`) designed to scale efficiently to large spatio-temporal datasets.
+- **Spatial downscaling** (`cf_downscale`) that disaggregates aggregate-level
+  responses to a finer grid under a pycnophylactic (mass-preserving) constraint.
 - Optional **add-learn** with **random forest** or **LightGBM** that captures
   nonlinearities the linear part cannot absorb, with quantile-based predictive
-  intervals.
-- GLM support for **Gaussian, Poisson, Binomial, Gamma**, plus quasi-likelihood
-  families on the R side.
-- **Spatial downscaling** (`cf_downscale`) that disaggregates aggregate-level
-  responses to a finer grid under a pycnophylactic (mass-preserving) constraint,
-  with a GLMM extension (`cf_dglm`) for count/spatiotemporal data.
-- **Verifiable predictive intervals**: predictions default to the
-  holdout-calibrated *observation* predictive (`se_type="prediction"`) so
-  `pred_q` covers new observations — Gaussian conformal, Poisson
-  negative-binomial, binomial temperature scaling — together with opt+field
-  cluster-robust coefficient standard errors (`se_method="opt"`).
+  intervals (`cf_lm` only).
+- **Predictive intervals**: predictions default to the
+  holdout-calibrated observation-level predictive uncertainty (`se_type="prediction"`).
 
 ## Repository layout
 
@@ -110,8 +106,8 @@ print(mod.pred["pred"][:5])
 |---|---|
 | `cf_lm_hv` / `cf_lm` | Train & holdout-validate / predict with the Gaussian CF spatial model |
 | `cf_glm_hv` / `cf_glm` | Train & holdout-validate / predict with a CF spatial GLMM |
+| `cf_dglm_hv` / `cf_dglm` | Train & holdout-validate / predict with a CF spatio-temporal GLMM |
 | `cf_downscale_hv` / `cf_downscale` | Train & holdout-validate / predict spatial downscaling (areal → fine grid) |
-| `cf_dglm_hv` / `cf_dglm` | Downscaling GLMM for count / spatiotemporal data |
 | `sp_scalewise` | Extract the spatial process for a given bandwidth range |
 | `spCFmap` | Interactive Shiny map explorer for CF outputs (**R only**) |
 
@@ -149,6 +145,15 @@ predictive SD and coefficient-SE estimators).
   number  = {2605.01157},
   year    = {2026},
 }
+
+@article{Murakami2026c,
+  author  = {Murakami, Daisuke},
+  title   = {Title: Fast covariance-free spatiotemporal modeling via coarse-to-fine learning},
+  journal = {ArXiv},
+  number  = {2608.03449},
+  year    = {2026},
+}
+
 ```
 
 ## License
