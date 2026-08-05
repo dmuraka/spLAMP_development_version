@@ -96,7 +96,7 @@ initial_fun_glm  <- function(x, y, coords, offset=NULL, x_sel=NULL,
   if(is.null(offset)) offset<- rep(0,n)
   gmod           <- glm(y~0+x+offset(offset),family=family)
   pred           <- predict(gmod, type="link")
-  resid          <- gmod$residuals            # (y - exp(m))/exp(m) in case of poisson　
+  resid          <- gmod$residuals            # (y - exp(m))/exp(m) in case of poisson
   beta_int       <- matrix( coefficients(gmod) )
   row.names(beta_int)<-xname
 
@@ -179,65 +179,45 @@ lwr_glm        <- function(coords, coords_uni,resid, x, w=NULL, offset=NULL,
     for(i in 1:nx) B_var[,i]<- mean(b_old[,i]^2)
   }
 
-  ################# accumulators
+  ################# accumulators via the fused nanoflann kernel
   n0 <- 0L
   if(!is.null(coords0)) n0 <- nrow(coords0)
 
-  id_train_flag           <- logical(n)
-  id_train_flag[id_train] <- TRUE
+  id_train_int            <- integer(n)
+  id_train_int[id_train]  <- 1L
   vc_int                  <- as.integer(vc)
 
-  b_all        <- matrix(0, n, nx)
-  bv_inv_all   <- matrix(0, n, nx)
-  pv_inv_all   <- matrix(0, n, nx)
-  b_old        <- matrix(0, length(sel_list), nx)
+  ## Fused kernel (src/lwr_chunk_glm_fused.cpp): builds a kd-tree over `coords`
+  ## (and `coords0`) ONCE and does radius-search -> local GLM -> scatter-add
+  ## per knot inline, WITHOUT materialising the neighbour lists. This restores
+  ## ~O(N log N) scaling (the earlier chunk-size problem) at much lower peak
+  ## memory (no O(N * avg_neighbors) neighbour list) and is a bit faster.
+  ## Numerically identical to the frNN + lwr_chunk_glm_cpp path (~1e-13, only
+  ## from sqrt(squared distance) vs direct distance / summation order).
+  fres <- lwr_glm_fused_cpp(
+    coords       = coords,
+    coords_cent  = matrix(coords_cent, ncol = 2),
+    resid        = as.numeric(resid),
+    w_obs        = as.numeric(w),
+    x            = x,
+    id_train     = id_train_int,
+    B_var        = B_var,
+    vc_cols      = vc_int,
+    band         = band,
+    kernel_id    = kernel_id,
+    threshold    = threshold,
+    is_lm        = 0L,
+    coords0_sexp = if(!is.null(coords0)) as.matrix(coords0) else NULL,
+    x0_sexp      = if(!is.null(coords0)) x0 else NULL)
+  b_all        <- fres$b_all
+  bv_inv_all   <- fres$bv_inv_all
+  pv_inv_all   <- fres$pv_inv_all
+  b_old        <- fres$b_old
   b_all0 <- bv_inv_all0 <- pv_inv_all0 <- NULL
   if (!is.null(coords0)) {
-    b_all0      <- matrix(0, n0, nx)
-    bv_inv_all0 <- matrix(0, n0, nx)
-    pv_inv_all0 <- matrix(0, n0, nx)
-  }
-
-  ## Process sel_list in chunks to cap peak neighbor-list memory at
-  ## O(chunk_size * avg_neighbors). The C++ kernel accumulates in place.
-  chunk_size   <- max(1L, min(length(sel_list),
-                              as.integer(ceiling(1e8 / max(n, 1L)))))
-  chunk_starts <- seq.int(1L, length(sel_list), by = chunk_size)
-
-  for (cs in chunk_starts) {
-    ce         <- min(cs + chunk_size - 1L, length(sel_list))
-    sel_chunk  <- sel_list[cs:ce]
-    query      <- coords_cent[sel_chunk, , drop = FALSE]
-    dbnn       <- frNN(x = coords, query = query, eps = threshold, sort = FALSE)
-    dbnn0      <- NULL
-    if (!is.null(coords0)) {
-      dbnn0 <- frNN(x = coords0, query = query, eps = threshold, sort = FALSE)
-    }
-
-    lwr_chunk_glm_cpp(
-      nb_id            = dbnn$id,
-      nb_dist          = dbnn$dist,
-      nb_id0_sexp      = if(!is.null(coords0)) dbnn0$id   else NULL,
-      nb_dist0_sexp    = if(!is.null(coords0)) dbnn0$dist else NULL,
-      sel_chunk        = as.integer(sel_chunk),
-      id_train_flag    = id_train_flag,
-      resid            = as.numeric(resid),
-      w_obs            = as.numeric(w),
-      x                = x,
-      x0_sexp          = if(!is.null(coords0)) x0 else NULL,
-      B_var            = B_var,
-      vc_cols          = vc_int,
-      band             = band,
-      kernel_id        = kernel_id,
-      b_all            = b_all,
-      bv_inv_all       = bv_inv_all,
-      pv_inv_all       = pv_inv_all,
-      b_all0_sexp      = if(!is.null(coords0)) b_all0      else NULL,
-      bv_inv_all0_sexp = if(!is.null(coords0)) bv_inv_all0 else NULL,
-      pv_inv_all0_sexp = if(!is.null(coords0)) pv_inv_all0 else NULL,
-      b_old            = b_old
-    )
-    rm(dbnn); if (!is.null(coords0)) rm(dbnn0)
+    b_all0      <- fres$b_all0
+    bv_inv_all0 <- fres$bv_inv_all0
+    pv_inv_all0 <- fres$pv_inv_all0
   }
 
   ################# selection of vc through CV
@@ -251,8 +231,10 @@ lwr_glm        <- function(coords, coords_uni,resid, x, w=NULL, offset=NULL,
 
     l_pred        <- l_pred  + pred
     l_pred_off    <- .spcf_clip_l(l_pred, family) + offset
-    gmod0         <- glm(y ~ 0 + x + offset(l_pred_off),family=family)
-    sse_hv        <- sum(residuals(gmod0, type="deviance")[-id_train]^2 )
+    ## glm.fit direct (dglm-style): identical fitted values / deviance as
+    ## glm(y ~ 0 + x + offset(l_pred_off)); avoids the per-band formula rebuild.
+    gmod0         <- glm.fit(x, y, offset=l_pred_off, family=family)
+    sse_hv        <- sum(family$dev.resids(y, gmod0$fitted.values, 1)[-id_train] )
     run           <- ifelse(sse_hv<sse_hv0, TRUE, FALSE)
 
     if(!run){
@@ -280,6 +262,12 @@ lwr_glm        <- function(coords, coords_uni,resid, x, w=NULL, offset=NULL,
     bv_all[, -vc]   <- NA
     bv_all[is.nan(bv_all)]<-Inf
 
+    ## Predictive variance per eq.(10): 1 / sum_k (w_k / pv_k). Grows away from
+    ## data (link scale), unlike the coefficient variance bv_all.
+    pv_all          <- 1/pv_inv_all
+    pv_all[, -vc]   <- NA
+    pv_all[is.nan(pv_all)] <- Inf
+
     #pred            <- rowSums(x*b_all)
     if( !is.null(coords0) ){
       bv_all0          <- bv_inv_all0
@@ -292,18 +280,179 @@ lwr_glm        <- function(coords, coords_uni,resid, x, w=NULL, offset=NULL,
       bv_all0[, vc]    <- 1/bv_inv_all0[, vc]
       bv_all0[, -vc]   <- NA
       bv_all0[is.nan(bv_all0)]<-Inf
+      pv_all0          <- 1/pv_inv_all0
+      pv_all0[, -vc]   <- NA
+      pv_all0[is.nan(pv_all0)] <- Inf
       pred0       <- rowSums(x0*b_all0)
 
     } else {
-      b_all0 <-bv_all0<-pred0<-NULL
+      b_all0 <-bv_all0<-pv_all0<-pred0<-NULL
     }
 
-    return(list(beta=b_all, beta_v=bv_all, pred=pred, sel_id=sel_id,
+    return(list(beta=b_all, beta_v=bv_all, beta_pv=pv_all, pred=pred, sel_id=sel_id,
                 coords_cent=coords_cent,
-                beta0=b_all0,beta0_v=bv_all0, pred0=pred0, b_old=b_old,
+                beta0=b_all0,beta0_v=bv_all0, beta0_pv=pv_all0, pred0=pred0, b_old=b_old,
                 run=run,sse_hv=sse_hv,vc_sel=vc, sse_hv0=sse_hv0))
   } else {
     return(list(run=FALSE))
   }
 }
 
+
+## Spatial-block cluster-robust covariance for the (constant) coefficients of a
+## coarse-to-fine spatial GLMM/LM. The model-based covariance treats the fitted
+## spatial field as a known offset, so it ignores that the residual is a
+## spatially correlated random field; with smooth covariates this badly
+## understates Var(beta-hat). Here the field is put back into the working
+## residual (e = field + (y - mu)/mu') and a cluster-robust sandwich is taken
+## over spatial blocks (a GxG grid; G ~ n_loc^{1/3} clamped to [G_lo, 8], with a
+## range guard widening blocks to at least c_guard x the MEDIAN committed
+## bandwidth so blocks exceed the field's correlation length). The defaults
+## c_guard = 1.0 and G_lo = 4 were tuned (gaussian/Poisson/binomial, correlation
+## ranges 0.06-0.40) to remove the over-conservatism of stronger guards at
+## short/moderate range while keeping coverage from collapsing at long range
+## (worst-case coverage ~0.72 across families). Reduces to the field-in-error
+## OLS sandwich for gaussian/identity. Returns the p x p covariance V and G.
+#' @keywords internal
+#' @noRd
+.spcf_clusterSE <- function(y, X, beta, field, offset, family, coords, bands,
+                            c_guard = 1.0) {
+  X <- as.matrix(X); beta <- as.numeric(beta); field <- as.numeric(field)
+  if (is.null(offset)) offset <- 0
+  eta <- .spcf_clip_l(as.numeric(X %*% beta) + field + offset, family)
+  mu  <- family$linkinv(eta); mup <- family$mu.eta(eta)
+  v   <- pmax(family$variance(mu), 1e-8)
+  W   <- pmax(mup^2 / v, 1e-8)
+  e   <- field + (y - mu) / mup                       # working residual WITH the field
+  coords <- as.matrix(coords)
+  ## Per-axis block counts: each coordinate axis is split so that a block side
+  ## exceeds the field's correlation length (proxied by the median committed
+  ## bandwidth), independently in x and y. This keeps blocks larger than the
+  ## dependence range on BOTH axes even when the study region is strongly
+  ## anisotropic (elongated), where a common count per axis would make the narrow
+  ## axis's blocks finer than the range and leave neighbouring blocks correlated.
+  ## Counts are clamped to [2, 8] per axis. The defaults (median bandwidth,
+  ## c_guard = 1) were tuned by checking coverage across response families,
+  ## correlation ranges and aspect ratios.
+  rng <- suppressWarnings(as.numeric(stats::quantile(bands, 0.5, na.rm = TRUE)))
+  if (!length(rng) || !is.finite(rng) || rng <= 0)
+    rng <- mean(apply(coords, 2, function(z) diff(range(z)))) / 8
+  span <- apply(coords, 2, function(z) diff(range(z)))
+  Gxy  <- pmax(2L, pmin(8L, as.integer(floor(span / (c_guard * rng)))))
+  qx  <- stats::quantile(coords[, 1], seq(0, 1, length.out = Gxy[1] + 1))
+  qy  <- stats::quantile(coords[, 2], seq(0, 1, length.out = Gxy[2] + 1))
+  blk <- interaction(cut(coords[, 1], unique(qx), include.lowest = TRUE),
+                     cut(coords[, 2], unique(qy), include.lowest = TRUE),
+                     drop = TRUE)
+  G   <- nlevels(blk)
+  XtWXi <- solve(crossprod(X, W * X))
+  S   <- rowsum(X * (W * e), blk)                     # G x p per-block score sums
+  V   <- (G / (G - 1)) * XtWXi %*% crossprod(S) %*% XtWXi
+  list(V = V, G = G)
+}
+
+## Analytic leave-one-out (LOO) sandwich meat -- a stable, refit-free ceiling for
+## the opt+field field term. The cascade field is (locally) a linear smoother of
+## the working response, so the LOO working residual is r_loo = r / (1 - h), with
+## h the predictor leverage: h = h_X + h_field, where h_X = W * x' (X'WX)^{-1} x
+## is the fixed-effect leverage and h_field aggregates the per-scale kernel
+## self-weights (1 / sum_j exp(-d_ij / h_r)) across committed bandwidths h_r
+## (combined as 1 - prod_r (1 - h_r)). The LOO residuals feed the same spatial
+## block sandwich as B_noise. This estimates the TOTAL score variance (noise +
+## field error) at full n without refitting; used only as an upper cap so it
+## reins in the count-family (W = mu) field over-shoot without touching families
+## where opt+field is already calibrated. O(N) cost (one knn + per-scale sums).
+.spcf_levloo_meat <- function(X, W, r, coords, bands, blk, Ai) {
+  X <- as.matrix(X); coords <- as.matrix(coords); np <- nrow(X)
+  bands <- bands[is.finite(bands) & bands > 0]
+  hX <- W * rowSums((X %*% Ai) * X)                     # fixed-effect leverage
+  hfield <- rep(0, np)
+  if (length(bands)) {
+    k  <- min(np - 1L, 200L)
+    kn <- FNN::get.knn(coords, k = k)$nn.dist
+    loglev <- rep(0, np)
+    for (hr in bands) {
+      s_ir <- 1 + rowSums(exp(-kn / hr))               # kernel row sum (+ self)
+      loglev <- loglev + log1p(-pmin(1 / s_ir, 0.999))
+    }
+    hfield <- 1 - exp(loglev)
+  }
+  h_ii  <- pmin(pmax(hX, 0) + hfield, 0.99)
+  r_loo <- r / (1 - h_ii)
+  G <- nlevels(blk)
+  S <- rowsum(X * (W * r_loo), blk)
+  (G / (G - 1)) * crossprod(S)
+}
+
+## opt+field cluster-robust coefficient covariance (default). The classic
+## .spcf_clusterSE keeps the *realised* field inside the working residual
+## (e = field + noise); because the field's local sign is treated as data, the
+## clustered meat over-counts it and Var(beta) comes out conservative. Here the
+## meat is split into two pieces:
+##   (i)  B_noise -- the field-REMOVED working residual r = (y - mu)/mu.eta,
+##        block-clustered (sandwich, small-sample correction G/(G-1)); this is
+##        the pure observation-noise contribution.
+##   (ii) B_field -- the field uncertainty added back through its *calibrated*
+##        variance s_f^2 (the sill-capped, tau-scaled per-point field variance
+##        that also drives pred_lin_sd), with an explicit within-block
+##        exp(-d / h) correlation, h = median committed bandwidth. Modelling the
+##        field as a smooth correlated error (rather than the raw realisation)
+##        removes the classic conservatism while keeping near-nominal coverage.
+## s_f is passed on the link scale (sqrt of the capped field variance). eta and
+## the IRLS weights W still include the fitted field so mu / mu.eta match the
+## fitted model; only the additive field term is taken out of the residual.
+.spcf_optfield_SE <- function(y, X, beta, field, s_f, offset, family, coords,
+                              bands, c_guard = 1.0) {
+  X <- as.matrix(X); beta <- as.numeric(beta)
+  field <- as.numeric(field); s_f <- as.numeric(s_f)
+  if (is.null(offset)) offset <- 0
+  eta <- .spcf_clip_l(as.numeric(X %*% beta) + field + offset, family)
+  mu  <- family$linkinv(eta); mup <- family$mu.eta(eta)
+  v   <- pmax(family$variance(mu), 1e-8)
+  W   <- pmax(mup^2 / v, 1e-8)
+  r   <- (y - mu) / ifelse(abs(mup) < 1e-8, 1e-8, mup)   # field-removed residual
+  coords <- as.matrix(coords)
+  rng <- suppressWarnings(as.numeric(stats::quantile(bands, 0.5, na.rm = TRUE)))
+  if (!length(rng) || !is.finite(rng) || rng <= 0)
+    rng <- mean(apply(coords, 2, function(z) diff(range(z)))) / 8
+  span <- apply(coords, 2, function(z) diff(range(z)))
+  Gxy  <- pmax(2L, pmin(8L, as.integer(floor(span / (c_guard * rng)))))
+  qx  <- stats::quantile(coords[, 1], seq(0, 1, length.out = Gxy[1] + 1))
+  qy  <- stats::quantile(coords[, 2], seq(0, 1, length.out = Gxy[2] + 1))
+  blk <- interaction(cut(coords[, 1], unique(qx), include.lowest = TRUE),
+                     cut(coords[, 2], unique(qy), include.lowest = TRUE),
+                     drop = TRUE)
+  G   <- nlevels(blk)
+  Ai  <- solve(crossprod(X, W * X))
+  S   <- rowsum(X * (W * r), blk)                       # noise meat
+  Bnoise <- (G / (G - 1)) * crossprod(S)
+  U   <- X * (W * s_f)                                  # field meat (per point)
+  Bfield <- matrix(0, ncol(X), ncol(X))
+  for (lv in levels(blk)) {
+    ix <- which(blk == lv)
+    if (length(ix) == 1L) { Bfield <- Bfield + tcrossprod(U[ix, ]); next }
+    Dg <- as.matrix(stats::dist(coords[ix, , drop = FALSE]))
+    Rg <- exp(-Dg / rng)                               # within-block field corr
+    Ug <- U[ix, , drop = FALSE]
+    Bfield <- Bfield + crossprod(Ug, Rg %*% Ug)
+  }
+  Vof <- Ai %*% (Bnoise + Bfield) %*% Ai
+  ## leverage-LOO ceiling (self-calibrating). Cap each coefficient variance at
+  ## the analytic LOO sandwich, floored at the noise-only variance, and rescale
+  ## the opt+field covariance to the capped diagonal while preserving its
+  ## correlation structure (keeps the matrix PSD). This removes the count-family
+  ## over-shoot (Poisson) yet leaves Gaussian/binomial unchanged, where the LOO
+  ## ceiling exceeds the opt+field variance so the cap does not bind.
+  Bloo <- tryCatch(.spcf_levloo_meat(X, W, r, coords, bands, blk, Ai),
+                   error = function(e) NULL)
+  if (!is.null(Bloo)) {
+    Ve   <- Ai %*% Bnoise %*% Ai
+    Vloo <- Ai %*% Bloo %*% Ai
+    d    <- pmax(diag(Ve), pmin(diag(Vof), diag(Vloo)))
+    sof  <- sqrt(pmax(diag(Vof), .Machine$double.eps))
+    Rc   <- Vof / outer(sof, sof)
+    sdn  <- sqrt(pmax(d, 0))
+    Vof  <- Rc * outer(sdn, sdn)
+  }
+  list(V = Vof, G = G)
+}

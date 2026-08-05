@@ -2,7 +2,7 @@
 title: "Coarse-to-fine spatial modeling (CFSM) using the spCF package"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{spCF_lm}
+  %\VignetteIndexEntry{Coarse-to-fine spatial modeling (CFSM) using the spCF package}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 references:
@@ -130,7 +130,7 @@ st_crs(meuse.grid_sf)     <- 28992
 meuse.grid_sf$pred        <- mod$pred0$pred   # Predictive mean
 meuse.grid_sf$pred_sd     <- mod$pred0$pred_sd# Predictive standard deviations
 plot(meuse.grid_sf[,"pred"], border = NA, nbreaks = 20, key.pos=4,axes=TRUE)
-plot(meuse.grid_sf[,"pred_sd"], pal = hcl.colors(9, "Viridis"), border = NA, 
+plot(meuse.grid_sf[,"pred_sd"], pal = function(n) hcl.colors(n, "Viridis"), border = NA, 
      nbreaks = 9, key.pos = 4,axes = TRUE)
 ```
 
@@ -167,5 +167,21 @@ plot(meuse.grid_sf[,c("z1_sd","z2_sd","z3_sd")],
 ```
 
 The `sp_scalewise` function is useful for multiscale spatial pattern analysis (or feature extraction), which is commonly conducted in ecological, epidemiological, and environmental studies.
+
+## Interactive mapping
+
+The maps above are static. `spCFmap()` opens a Shiny application that draws the same results over a basemap. Called without arguments it launches the full application, where the *meuse* data used here is the pre-filled *Demo (meuse, sp)* entry, so the model can be fitted, mapped and exported as CSV or GeoJSON without writing code:
+
+```{r, eval = FALSE}
+spCFmap()
+```
+
+Passing a fitted model maps that object directly. The `crs` argument states the coordinate reference system of the coordinates given to the model -- *meuse* uses the Dutch RD grid, EPSG:28992:
+
+```{r, eval = FALSE}
+spCFmap(mod, crs = 28992)
+```
+
+The layer (predictive mean, predictive SD, covariate effect, or a scale-wise component with a bandwidth-range slider), the class breaks, the palette and the basemap are then chosen interactively.
 
 ### Reference

@@ -4,7 +4,17 @@
 \alias{cf_lm}
 \title{Coarse-to-fine spatial modeling (CFSM) for Gaussian response}
 \usage{
-cf_lm(y, x = NULL, coords, x0 = NULL, coords0 = NULL, mod_hv)
+cf_lm(
+  y,
+  x = NULL,
+  coords,
+  x0 = NULL,
+  coords0 = NULL,
+  mod_hv,
+  robust_se = TRUE,
+  se_type = c("prediction", "mean"),
+  se_method = c("opt", "classic")
+)
 }
 \arguments{
 \item{y}{Vector of response variables (N x 1).}
@@ -19,6 +29,26 @@ cf_lm(y, x = NULL, coords, x0 = NULL, coords0 = NULL, mod_hv)
 prediction sites (N0 x 2).}
 
 \item{mod_hv}{Output object of the \code{\link{cf_lm_hv}} function.}
+
+\item{robust_se}{If \code{TRUE} (default), coefficient standard errors
+and predictive uncertainty are computed using a cluster-robust sandwich
+estimator accounting for local spatial correlation.
+Set \code{FALSE} to use naive SEs (not recommended).}
+
+\item{se_type}{Type of predictive uncertainty in \code{pred}/\code{pred_q}.
+\code{"prediction"} (default) returns the holdout-calibrated OBSERVATION
+predictive (mean uncertainty + residual variance, split-conformal SD
+scaling on the \code{cf_lm_hv} validation samples); the signal versions are
+kept in \code{pred_signal}/\code{pred_q_signal}. \code{"mean"} returns the
+signal (mean) uncertainty only (previous behaviour).}
+
+\item{se_method}{Cluster-robust coefficient-SE estimator (used when
+\code{robust_se = TRUE}). \code{"opt"} (default) splits the sandwich
+meat into a field-removed observation-noise part and a field part that adds
+the calibrated field variance back with a within-block \code{exp(-d/h)}
+correlation (\code{h} = median committed bandwidth); this is near-nominal. A refit-free leverage leave-one-out ceiling then caps the field term, preventing over-coverage for count (Poisson) responses while leaving already-calibrated families unchanged.
+\code{"classic"} keeps the realised field inside the working residual (the
+previous behaviour), which is valid but conservative.}
 }
 \value{
 A list with the following elements:
@@ -26,29 +56,43 @@ A list with the following elements:
   \item{beta}{Regression coefficients, their standard errors, and the lower
   and upper limits of the 95 percent confidence intervals.}
   \item{sd_summary}{Standard deviation of the regression term (xb), spatial
-  process (spatial_scale1, spatial_scale2,...),
-  additionally learned components (effective if `cf_lm_hv/add_learn` is not
+  processes (spatial_scale1, spatial_scale2,...),
+  additional learned components (effective if `cf_lm_hv/add_learn` is not
   `none`), and residuals.}
-  \item{e_summary}{R-squared for the validation samples (validation_R2),
-  root mean squared error for the validation samples (validation_RMSE),
-  and the residual standard deviation (residual_SD).}
-  \item{pred}{Predictive means and standard deviations (sample sites).}
+  \item{e_summary}{Holdout validation accuracy evaluated on the validation
+  samples: R-squared (validation_R2), root mean squared error
+  (validation_RMSE), and mean absolute error (validation_MAE).}
+  \item{pred}{Predictive means and standard deviations (sample sites). When
+  no additional learner is active, the spatial-process contribution to the
+  predictive SD is rescaled by a holdout-calibrated factor (stored as
+  \code{other$tau}) estimated on the validation samples.}
   \item{pred0}{Predictive means and standard deviations (prediction sites).}
-  \item{bands}{Bandwidth values for each scale. The i-th bandwidth is used
-  to describe the spatial process corresponding to the i-th column of the Z matrix.}
+  \item{pred_q}{Predictive quantiles at the sample sites (data.frame with
+  columns \code{q0.005}, \code{q0.025}, ..., \code{q0.975}, \code{q0.995}).
+  With \code{add_learn = "rf"}/\code{"lightgbm"} active, the combined
+  predictive distribution is calibrated by total conformalized quantile
+  regression (CQR) on the validation samples; otherwise the quantiles are
+  Gaussian about the predictive mean using the (tau-calibrated)
+  \code{pred_sd}. \code{pred_sd} is a Gaussian-equivalent summary of these
+  quantiles.}
+  \item{pred0_q}{Predictive quantiles at the prediction sites; identical
+  column structure to \code{pred_q}. \code{NULL} when prediction sites are
+  not supplied.}
+  \item{bands}{Bandwidth values for each scale. The i-th bandwidth
+  corresponding to the i-th column of the Z matrix.}
   \item{Z}{Predictive means of the single-scale processes at each scale,
   corresponding to each bandwidth value (sample sites; list).}
   \item{Z_sd}{Predictive standard deviation of the spatial processes
-  corresponding to in each bandwidth (sample sites; list).}
-  \item{Z0}{Predictive mean of the spatial process corresponding to
-  each bandwidth (prediction sites; list).}
+  at each scale (sample sites; list).}
+  \item{Z0}{Predictive mean of the spatial process at each scale
+  (prediction sites; list).}
   \item{Z0_sd}{Predictive standard deviation of the spatial process
-  corresponding to in each bandwidth (prediction sites; list).}
-  \item{Other}{Other internal output objects.}
+  at each bandwidth (prediction sites; list).}
+  \item{other}{Other internally used output objects.}
 }
 }
 \description{
-Prediction and regression via coarse-to-fine spatial modeling.
+Scalable prediction, regression, and multiscale analysis via Gaussian CFSM.
 }
 \examples{
 set.seed(123)
@@ -100,12 +144,14 @@ plot(meuse.grid_sf3[,c("z1","z2","z3")], pch = 15,
 plot(meuse.grid_sf3[,c("z1_sd","z2_sd","z3_sd")], pch = 15,
      cex = 0.5, nbreaks = 20,key.pos=4,axes=TRUE) # Predictive SD
 
+### The same fit, explored interactively over a basemap
+# spCFmap(mod, crs = 28992)   # crs = the system the coordinates are in
+
 }
 \references{
 Murakami, D., Comber, A., Yoshida, T., Tsutsumida, N., Brunsdon, C.,
-& Nakaya, T. (2026).
-Coarse-to-fine spatial modeling: A scalable, machine-learning-compatible
-framework.
+& Nakaya, T. (2026). Coarse-to-fine spatial modeling:
+A scalable, machine-learning-compatible framework.
 *Geographical Analysis*, 58(2), e70034.
 https://onlinelibrary.wiley.com/doi/10.1111/gean.70034
 }

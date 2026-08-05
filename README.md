@@ -17,10 +17,14 @@ small-scale spatial structure for interpretation.
 Key features:
 
 - Coarse-to-fine bandwidth search that is scalable for large samples.
-- Optional **random forest add-learn** that captures nonlinearities the
-  linear part cannot absorb, with quantile-RF based predictive intervals.
+- Optional **add-learn** with **random forest** or **LightGBM** that captures
+  nonlinearities the linear part cannot absorb, with quantile-based predictive
+  intervals.
 - GLM support for **Gaussian, Poisson, Binomial, Gamma**, plus quasi-likelihood
   families on the R side.
+- **Spatial downscaling** (`cf_downscale`) that disaggregates aggregate-level
+  responses to a finer grid under a pycnophylactic (mass-preserving) constraint,
+  with a GLMM extension (`cf_dglm`) for count/spatiotemporal data.
 
 ## Repository layout
 
@@ -99,14 +103,18 @@ print(mod.pred["pred"][:5])
 
 | Function | Purpose |
 |---|---|
-| `cf_lm_hv` | Train & holdout-validate the Gaussian CF spatial model |
-| `cf_lm` | Predict / regress with a trained Gaussian CF model |
-| `cf_glm_hv` | Train & holdout-validate a CF spatial GLMM |
-| `cf_glm` | Predict / regress with a trained CF GLMM |
-| `sp_scalewise` | Extract spatial process for a given bandwidth range |
+| `cf_lm_hv` / `cf_lm` | Train & holdout-validate / predict with the Gaussian CF spatial model |
+| `cf_glm_hv` / `cf_glm` | Train & holdout-validate / predict with a CF spatial GLMM |
+| `cf_downscale_hv` / `cf_downscale` | Train & holdout-validate / predict spatial downscaling (areal → fine grid) |
+| `cf_dglm_hv` / `cf_dglm` | Downscaling GLMM for count / spatiotemporal data |
+| `sp_scalewise` | Extract the spatial process for a given bandwidth range |
+| `spCFmap` | Interactive Shiny map explorer for CF outputs (**R only**) |
 
-See [`vignettes/spCF_intro.Rmd`](vignettes/spCF_intro.Rmd) and
-[`vignettes/spCF_glm.Rmd`](vignettes/spCF_glm.Rmd) for the R walk-throughs,
+See the R walk-throughs in
+[`vignettes/spCF_lm.Rmd`](vignettes/spCF_lm.Rmd),
+[`vignettes/spCF_glm.Rmd`](vignettes/spCF_glm.Rmd),
+[`vignettes/spCF_downscale.Rmd`](vignettes/spCF_downscale.Rmd), and
+[`vignettes/spCF_dglm.Rmd`](vignettes/spCF_dglm.Rmd),
 and [`python/README.md`](python/README.md) for Python-specific notes
 (including the three `sd_method` options for predictive SD).
 

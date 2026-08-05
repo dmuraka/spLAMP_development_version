@@ -10,16 +10,32 @@ Provides functions for coarse-to-fine spatial modeling (CFSM),
 enabling fast spatial prediction, regression, and uncertainty
 quantification. Suitable for moderate to large samples.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/dmuraka/spCF}
+  \item Report bugs at \url{https://github.com/dmuraka/spCF/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: Daisuke Murakami \email{dmuraka@ism.ac.jp}
 
 Authors:
 \itemize{
+  \item Daisuke Murakami \email{dmuraka@ism.ac.jp}
   \item Alexis Comber
   \item Takahiro Yoshida
   \item Narumasa Tsutsumida
   \item Chris Brunsdon
   \item Tomoki Nakaya
+}
+
+Other contributors:
+\itemize{
+  \item Jose Luis Blanco-Claraco (Author of the bundled 'nanoflann' C++ library (src/nanoflann.h)) [contributor, copyright holder]
+  \item Marius Muja (Copyright holder of the bundled 'nanoflann' C++ library) [copyright holder]
+  \item David G. Lowe (Copyright holder of the bundled 'nanoflann' C++ library) [copyright holder]
 }
 
 }

@@ -180,11 +180,13 @@ def bopt_core(par, bands, Z, beta_int, nx, x, y, n_bid, id_train=None):
     for i in range(n_bid):
         bbb += w[i] * Z[:, i]
     xbeta[:, 0] = x[:, 0] * (beta_int[0, 0] + bbb)
+    # Match R bopt_core exactly: covariate columns are only populated when
+    # nx > 2 (internal_utils_lm.R). For nx == 2 (single covariate) R leaves
+    # xbeta[, 2] = 0, so resid == y; reproducing that here keeps the optimized
+    # field-scaling weight bit-for-bit consistent with the R package.
     if nx > 2:
         for j in range(1, nx):
             xbeta[:, j] = x[:, j] * beta_int[j, 0]
-    elif nx == 2:
-        xbeta[:, 1] = x[:, 1] * beta_int[1, 0]
 
     if nx > 1:
         resid = y - np.sum(xbeta[:, 1:], axis=1)
@@ -411,6 +413,12 @@ def lwr(
     bv_all = np.where(np.isnan(bv_all) & ~np.isnan(bv_all), bv_all, bv_all)
     bv_all[np.isnan(bv_inv_all)] = np.inf
 
+    # Predictive variance per eq.(10): pv = 1 / sum_k (w_k / pv_k). Grows away
+    # from data (all w_k -> 0), unlike the coefficient variance bv_all.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pv_all = np.where(pv_inv_all != 0, 1.0 / pv_inv_all, np.inf)
+    pv_all[:, not_vc_mask] = np.nan
+
     pred = np.sum(x * b_all, axis=1)
 
     if has0:
@@ -435,18 +443,23 @@ def lwr(
                 np.inf,
             )
         bv_all0[:, not_vc_mask] = np.nan
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pv_all0 = np.where(pv_inv_all0 != 0, 1.0 / pv_inv_all0, np.inf)
+        pv_all0[:, not_vc_mask] = np.nan
         pred0 = np.sum(x0 * b_all0, axis=1)
     else:
-        b_all0 = bv_all0 = pred0 = None
+        b_all0 = bv_all0 = pv_all0 = pred0 = None
 
     return {
         "beta": b_all,
         "beta_v": bv_all,
+        "beta_pv": pv_all,
         "pred": pred,
         "sel_id": sel_id_out,
         "coords_cent": coords_cent,
         "beta0": b_all0,
         "beta0_v": bv_all0,
+        "beta0_pv": pv_all0,
         "pred0": pred0,
         "b_old": b_old_out,
         "run": True,
@@ -468,6 +481,63 @@ def sample_from_qrf(rf_qmat: np.ndarray, qs: np.ndarray, n: int, n_draw: int = 1
             qi = np.sort(qi)
         draws[i, :] = np.interp(U[i, :], qs, qi)
     return draws
+
+
+def cqr_offsets(Qcal: np.ndarray, ycal: np.ndarray, qlevels: np.ndarray) -> np.ndarray:
+    """Split-conformal (CQR) offsets for symmetric quantile pairs.
+
+    Mirrors R ``cqr_offsets`` in internal_utils_lm.R.
+    """
+    Qcal = np.asarray(Qcal, dtype=float)
+    ycal = np.asarray(ycal, dtype=float).ravel()
+    qlevels = np.asarray(qlevels, dtype=float)
+    ncal = ycal.shape[0]
+    off = np.zeros(qlevels.shape[0])
+    for j in np.where(qlevels < 0.5)[0]:
+        k = np.where(np.abs(qlevels - (1 - qlevels[j])) < 1e-9)[0]
+        if k.size != 1:
+            continue
+        k = int(k[0])
+        nominal = 1 - 2 * qlevels[j]
+        E = np.maximum(Qcal[:, j] - ycal, ycal - Qcal[:, k])
+        lvl = min(math.ceil((ncal + 1) * nominal) / ncal, 1.0)
+        Q = max(float(np.quantile(E, lvl, method="inverted_cdf")), 0.0)
+        off[j] = Q
+        off[k] = Q
+    return off
+
+
+def apply_cqr(Q: np.ndarray, qlevels: np.ndarray, off: np.ndarray) -> np.ndarray:
+    """Apply CQR offsets, widening lower quantiles down and upper up; then sort rows."""
+    Q = np.asarray(Q, dtype=float).copy()
+    qlevels = np.asarray(qlevels, dtype=float)
+    for j in range(qlevels.shape[0]):
+        if qlevels[j] < 0.5:
+            Q[:, j] = Q[:, j] - off[j]
+        elif qlevels[j] > 0.5:
+            Q[:, j] = Q[:, j] + off[j]
+    return np.sort(Q, axis=1)
+
+
+def total_qmat(pred, core_sd, qmat, qlevels_in, qlevels_out, n_draw: int = 400,
+               rng=None) -> np.ndarray:
+    """Total predictive quantiles: convolve the Gaussian core (mean ``pred``, sd
+    ``core_sd``) with the centered additional-learning residual distribution
+    (drawn from ``qmat`` at ``qlevels_in``), then take empirical quantiles at
+    ``qlevels_out``. Mirrors R ``total_qmat``.
+    """
+    if rng is None:
+        rng = np.random.default_rng(123)
+    pred = np.asarray(pred, dtype=float).ravel()
+    core_sd = np.asarray(core_sd, dtype=float).ravel()
+    n = pred.shape[0]
+    A = sample_from_qrf(np.asarray(qmat, dtype=float), np.asarray(qlevels_in, dtype=float),
+                        n, n_draw, rng=rng)
+    A = A - A.mean(axis=1, keepdims=True)
+    G = rng.standard_normal((n, n_draw)) * core_sd[:, None]
+    tot = pred[:, None] + G + A
+    qout = np.asarray(qlevels_out, dtype=float)
+    return np.quantile(tot, qout, axis=1).T
 
 
 def add_mod_lm(
@@ -519,6 +589,7 @@ def add_mod_lm(
     if train:
         a_run = False
         a_par_out = {"mtry": None, "min_node_size": None}
+        a_pred_hv = None
         mtry_all = sorted({max(1, round((nx + 1) / 5)), max(1, round((nx + 1) / 3)), max(1, round((nx + 1) / 2))})
         param_grid = [(m, mns) for m in mtry_all for mns in (1, 5, 10)]
         for mtry, mns in param_grid:
@@ -538,7 +609,10 @@ def add_mod_lm(
                 sse_hv = sse_rf
                 a_par_out = {"mtry": int(mtry), "min_node_size": int(mns)}
                 a_run = True
-        return {"sse_hv": sse_hv, "a_par": a_par_out, "a_run": a_run, "add_learn": add_learn, "a_xname": a_xname}
+                # Validation prediction of the best learner -> cf_lm_hv pred_hv.
+                a_pred_hv = pred_test
+        return {"sse_hv": sse_hv, "a_par": a_par_out, "a_run": a_run,
+                "add_learn": add_learn, "a_xname": a_xname, "a_pred_hv": a_pred_hv}
 
     # predict path
     a_par = a_par or {"mtry": max(1, round((nx + 1) / 3)), "min_node_size": 5}
@@ -573,15 +647,19 @@ def add_mod_lm(
                                  rng=np.random.default_rng(seed)).var(axis=1, ddof=1)
         pred0 = 0.0
         pred0_v = 0.0
+        qmat0 = None
         if a_X0 is not None:
             pred0 = rf.predict(a_X0, quantiles="mean")
             qmat0 = np.asarray(rf.predict(a_X0, quantiles=list(qs)))
             pred0_v = sample_from_qrf(qmat0, qs, a_X0.shape[0],
                                       n_draw=200,
                                       rng=np.random.default_rng(seed)).var(axis=1, ddof=1)
+        # qmat/qmat0/qlevels feed the total-CQR predictive distribution in cf_lm
+        # (matching R's ranger(quantreg=TRUE) path); pred_v/pred0_v are retained
+        # for the cheaper Gaussian sd_method branches.
         return {"mod": rf, "pred": pred, "pred0": pred0, "pred_v": pred_v,
-                "pred0_v": pred0_v, "a_xname": a_xname,
-                "add_learn": add_learn, "sd_method": sd_method}
+                "pred0_v": pred0_v, "qmat": qmat, "qmat0": qmat0, "qlevels": qs,
+                "a_xname": a_xname, "add_learn": add_learn, "sd_method": sd_method}
 
     rf = RandomForestRegressor(
         n_estimators=500,

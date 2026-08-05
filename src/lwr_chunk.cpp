@@ -131,7 +131,7 @@ void lwr_chunk_cpp(
         const double w  = wei_buf[i];
         const double ws = w * w;
         const double xv = xj[sidx];
-        const double pv_sel      = (xv * xv * inv_wxxw) * sigma + sigma / ws;
+        const double pv_sel      = (xv * xv * inv_wxxw) * sigma + sigma / w;
         const double wei2_pv_sel = ws / pv_sel;
         b_all_j[sidx]      += wei2_pv_sel * b_sel_val;
         bv_inv_all_j[sidx] += wei2_pv_sel * inv_bv_sel;
@@ -148,7 +148,7 @@ void lwr_chunk_cpp(
           const double w0  = wei0_buf[i];
           const double w0s = w0 * w0;
           const double xv0 = x0_j[sidx0];
-          const double pv_sel0      = (xv0 * xv0 * inv_wxxw) * sigma + sigma / w0s;
+          const double pv_sel0      = (xv0 * xv0 * inv_wxxw) * sigma + sigma / w0;
           const double wei2_pv_sel0 = w0s / pv_sel0;
           b_all0_j[sidx0]      += wei2_pv_sel0 * b_sel_val;
           bv_inv_all0_j[sidx0] += wei2_pv_sel0 * inv_bv_sel;

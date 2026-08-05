@@ -5,6 +5,7 @@
 ^\.DS_Store$
 ^\.positai$
 ^\.claude$
+^vignettes/.*_files$
 
 # Polyglot repo: Python port and benchmark scripts live alongside the R
 # source but must not be bundled into the R package tarball.

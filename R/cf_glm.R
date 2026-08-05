@@ -1,19 +1,39 @@
 #' Coarse-to-fine spatial generalized linear mixed models (CF-GLMMs)
 #'
-#' Prediction and regression via CF-GLMMs.
+#' Scalable prediction, regression, and multiscale analysis via CF-GLMMs.
 #'
-#' @param y Vector of response variables (N x 1) including continuous, count,
-#'  and binary responses, following an exponential family distribution.
+#' @param y Vector of response variables (N x 1), including continuous, count,
+#'   and binary responses following an exponential family distribution.
 #' @param x Matrix of covariates (N x K).
 #' @param coords Matrix of 2-dimensional point coordinates (N x 2).
-#' @param offset Optional. Vector of offset variable (N x 1) to be included
-#' in the linear predictor. It is consistent with that of \code{\link{glm}}.
+#' @param offset Optional. Vector of offset variables (N x 1) included
+#'   in the linear predictor, consistent with \code{\link{glm}}.
 #' @param x0 Optional. Matrix of covariates at prediction sites (N0 x K).
 #' @param coords0 Optional. Matrix of 2-dimensional point coordinates at
 #'   prediction sites (N0 x 2).
 #' @param offset0 Optional. Vector of offset variables at prediction sites
 #'  (N0 x 1)
 #' @param mod_hv Output object of the \code{\link{cf_glm_hv}} function.
+#' @param robust_se If \code{TRUE} (default), coefficient standard errors
+#'   and predictive uncertainty are computed using a cluster-robust sandwich
+#'   estimator accounting for local spatial correlation.
+#'   Set \code{FALSE} to use naive SEs (not recommended).
+#' @param se_type Type of predictive uncertainty in \code{pred}/\code{pred_q}.
+#'   \code{"prediction"} (default) returns the OBSERVATION predictive for a new
+#'   data point, holdout-calibrated on the \code{cf_glm_hv} validation samples
+#'   (Gaussian: mean uncertainty + residual variance, split-conformal SD
+#'   scaling; Poisson: negative-binomial count predictive; binomial: temperature
+#'   -calibrated probability with \code{pred_sd = sqrt(p(1-p))}). The mean/signal
+#'   versions are kept in \code{pred_signal}/\code{pred_q_signal}.
+#'   \code{"mean"} returns the signal (mean) uncertainty only (previous
+#'   behaviour). See \code{other$calibration} for the fitted calibration.
+#' @param se_method Cluster-robust coefficient-SE estimator (used when
+#'   \code{robust_se = TRUE}). \code{"opt"} (default) splits the sandwich
+#'   meat into a field-removed observation-noise part and a field part that adds
+#'   the calibrated field variance back with a within-block \code{exp(-d/h)}
+#'   correlation (\code{h} = median committed bandwidth); this is near-nominal. A refit-free leverage leave-one-out ceiling then caps the field term, preventing over-coverage for count (Poisson) responses while leaving already-calibrated families unchanged.
+#'   \code{"classic"} keeps the realised field inside the working residual (the
+#'   previous behaviour), which is valid but conservative.
 #'
 #' @return A list with the following elements:
 #' \describe{
@@ -22,9 +42,13 @@
 #'   \item{sd_summary}{Standard deviation of the regression term (xb), spatial
 #'   process (spatial_scale1, spatial_scale2,...),
 #'   additional learning, and residuals.}
-#'   \item{e_summary}{Error statistics for the validation samples: pseudo
-#'   R-squared, root mean squared error (RMSE), and mean absolute error (MAE).}
-#'   \item{pred}{Predictive means and standard deviations (sample sites).}
+#'   \item{e_summary}{Holdout validation accuracy evaluated on the validation
+#'   samples: R-squared (validation_Pseudo-R2), root mean squared error
+#'   (validation_RMSE), and mean absolute error (validation_MAE).}
+#'   \item{pred}{Predictive means and standard deviations (sample sites). The
+#'   spatial-process contribution to the predictive SD is rescaled by a
+#'   holdout-calibrated factor (stored as \code{other$tau}) estimated on the
+#'   validation samples.}
 #'   \item{pred0}{Predictive means and standard deviations (prediction sites).}
 #'   \item{pred_q}{Predictive quantiles on the response scale at the sample
 #'   sites. A data frame whose columns \code{q0.005}, \code{q0.025},
@@ -35,24 +59,25 @@
 #'   \item{pred0_q}{Predictive quantiles on the response scale at the
 #'   prediction sites. Column structure is identical to \code{pred_q}.
 #'   \code{NULL} when prediction sites are not supplied.}
-#'   \item{bands}{Bandwidth values for each scale. The i-th bandwidth is used
-#'   for the spatial process corresponding to the i-th column of the Z matrix.}
-#'   \item{Z}{Predictive mean of the spatial process in each scale
+#'   \item{bands}{Bandwidth values for each scale. The i-th bandwidth
+#'   corresponds to the i-th column of the Z matrix.}
+#'   \item{Z}{Predictive mean of the spatial process at each scale
 #'   (sample sites; list).}
-#'   \item{Z_sd}{Predictive standard deviation of the spatial process in each
+#'   \item{Z_sd}{Predictive standard deviation of the spatial process at each
 #'   scale (sample sites; list).}
-#'   \item{Z0}{Predictive mean of the spatial process in each scale
+#'   \item{Z0}{Predictive mean of the spatial process at each scale
 #'   (prediction sites; list).}
-#'   \item{Z0_sd}{Predictive standard deviation of the spatial process in each
+#'   \item{Z0_sd}{Predictive standard deviation of the spatial process at each
 #'   scale (prediction sites; list).}
-#'   \item{Other}{Other internal output objects.}
+#'   \item{other}{Other internally used output objects.}
 #' }
 #'
 #' @references
 #' Murakami, D., Comber, A., Yoshida, T., Tsutsumida, N., Brunsdon, C.,
 #' & Nakaya, T. (2025).
 #' Coarse-to-fine spatial GLMMs for scalable prediction and multiscale analysis.
-#' *ArXiv*.
+#' *ArXiv preprint*, 2605.01157.
+#' https://doi.org/10.48550/arXiv.2605.01157
 #'
 #' @seealso \code{\link{cf_glm_hv}}, \code{\link{sp_scalewise}}
 #'
@@ -91,6 +116,9 @@
 #' GGHB.IZ$z1  <- mod_s1$pred$pred
 #' GGHB.IZ$z2  <- mod_s2$pred$pred
 #' plot(GGHB.IZ[,c("z1","z2")],lwd=0.2,axes=TRUE,key.pos=4, nbreaks=50)# Extracted features
+#'
+#' ### The same fit, explored interactively over a basemap
+#' # spCFmap(mod, crs = 27700)   # crs = the system the coordinates are in
 #'
 #'
 #' ################ Example 2: Binary data modeling/spatial prediction
@@ -131,6 +159,9 @@
 #' plot(meuse.grid_sf[,c("z1","z2")], pch = 15,
 #'      cex = 0.5, nbreaks = 20,axes=TRUE) # Predictive means
 #'
+#' ### The same fit, explored interactively over a basemap
+#' # spCFmap(mod, crs = 28992)   # crs = the system the coordinates are in
+#'
 #'
 #' @author Daisuke Murakami
 #'
@@ -138,13 +169,20 @@
 #' @importFrom fields rdist
 #' @importFrom FNN get.knnx
 #' @importFrom nloptr nloptr
-#' @importFrom ranger ranger
 #' @importFrom utils capture.output
 #' @importFrom stats approx kmeans predict quantile rnorm runif sd var cor
 #'
 #' @export
 cf_glm          <- function(y, x=NULL, coords, offset=NULL,
-                            x0=NULL, coords0=NULL, offset0=NULL, mod_hv){
+                            x0=NULL, coords0=NULL, offset0=NULL, mod_hv,
+                            robust_se=TRUE, se_type=c("prediction","mean"),
+                            se_method=c("opt","classic")){
+  se_type        <- match.arg(se_type)
+  se_method      <- match.arg(se_method)
+
+  .spcf_check_mod_hv(mod_hv, "cf_glm_hv", "cf_glm_hv")
+  .spcf_check_data(y = y, x = x, coords = coords, offset = offset)
+  .spcf_check_newdata(x = x, x0 = x0, coords0 = coords0, offset0 = offset0)
 
   family         <- mod_hv$other$family
   bands          <- mod_hv$other$bands
@@ -163,10 +201,10 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
 
   if(!is.null(coords0)){
     if(!is.null(offset)&is.null(offset0)){
-      stop("Error: offset0 must be provided when offset is specified")
+      .spcf_stop("'offset0' must be provided when 'offset' is specified: the prediction sites need their own offset.")
     }
     if(!is.null(x)&is.null(x0)){
-      stop("Error: x0 must be provided when x is specified")
+      .spcf_stop("'x0' must be provided when 'x' is specified: the prediction sites need the same covariates.")
     }
   }
 
@@ -199,19 +237,21 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
     beta0        <- matrix(beta_int,nrow=n0,ncol=nx,byrow=TRUE)
     l_pred0      <- 0
     Z0 <- Z0_sd  <- matrix(0,nrow=n0,ncol=length(bands))
+    Z0_pv        <- matrix(0,nrow=n0,ncol=length(bands))   # eq.(10) predictive var (link)
 
   } else {
     n0  <- x0    <- NA
-    l_pred0      <- Z0 <- Z0_sd  <- NULL
+    l_pred0      <- Z0 <- Z0_sd  <- Z0_pv <- NULL
   }
 
   ##################### main loop for feature extraction
-  print("--- Learning multi-scale spatial process ---", quote=FALSE)
+  message("--- Learning multi-scale spatial process ---")
 
   bands_scale    <- which(mod_hv$other$VCmat[,1]==1)
 
   b_old          <- NULL
   Z     <- Z_sd  <- matrix(0,nrow=n ,ncol=length(bands))
+  Z_pv           <- matrix(0,nrow=n ,ncol=length(bands))   # eq.(10) predictive var (link)
   l_pred         <- 0
   if(!is.null(bands)){
     for(i in 1:max(bands_scale)){
@@ -238,6 +278,8 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
         ii          <- which(bands_scale==i)
         Z[,ii]      <- beta_add[,1]
         Z_sd[,ii]   <- sqrt(beta_v_add[,1])
+        bpv         <- lmod$beta_pv[,1]; bpv[!is.finite(bpv)] <- 0
+        Z_pv[,ii]   <- sqrt(bpv)
 
         l_pred_off  <- .spcf_clip_l(l_pred, family) + offset
         gmod0       <- glm(y ~ 0 + x + offset(l_pred_off),family=family)
@@ -262,6 +304,8 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
 
           Z0[,ii]       <- beta0_add[,1]
           Z0_sd[,ii]    <- sqrt(beta0_v_add[,1])
+          b0pv          <- lmod$beta0_pv[,1]; b0pv[!is.finite(b0pv)] <- 0
+          Z0_pv[,ii]    <- sqrt(b0pv)
         }
         comment         <- ""
       } else {
@@ -269,9 +313,8 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
       }
 
       print_add   <- ifelse(i<10,"  "," ")
-      print( paste0( " Scale",print_add,i,
-                     " (bandwidth:",format(bands_all[i],digits=7),")", comment),
-             quote = FALSE )
+      message( paste0( " Scale",print_add,i,
+                     " (bandwidth:",format(bands_all[i],digits=7),")", comment))
     }
   } else {
     message("Warning: No residual spatial process was modeled")
@@ -335,8 +378,97 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
   pred0_q      <- NULL
   qs           <- c(0.005, 0.025, 0.05, seq(0.1, 0.9, 0.1), 0.95, 0.975, 0.995)
   beta_int_vmat<- vcov(gmod)
+  ## spatial-block cluster-robust coefficient covariance (default): the naive
+  ## vcov treats the cascade field as a known offset and understates Var(beta)
+  ## because the residual is a correlated random field; .spcf_clusterSE restores
+  ## near-nominal coverage. Updates both the reported coefficient SEs and the
+  ## coefficient-uncertainty term of the predictive SE.
+  if(robust_se && !is.null(bands) && length(bands)>0){
+    cse <- tryCatch(.spcf_clusterSE(y=y, X=x, beta=beta_int, field=b,
+                                    offset=offset, family=family,
+                                    coords=coords, bands=bands),
+                    error=function(e) NULL)
+    if(!is.null(cse)){
+      beta_int_vmat <- cse$V
+      beta_int_se   <- sqrt(diag(cse$V))
+      beta_int_summ <- data.frame(coef=beta_int, coef_se=beta_int_se,
+                                  lower_95CI=beta_int-1.96*beta_int_se,
+                                  upper_95CI=beta_int+1.96*beta_int_se)
+    }
+  }
   pred_lin     <- predict(gmod,type="link")
-  pred_lin_sd  <- sqrt( rowSums((x %*% beta_int_vmat) * x ) + rowSums(Z_sd^2))
+
+  ## ---- Holdout variance calibration (tau) for the spatial-process component.
+  ## Uses the eq.(10) predictive variance (pv-based, link scale: grows away from
+  ## data), level-calibrated by a single holdout scalar tau and capped at the
+  ## marginal field variance (sill) so it saturates rather than diverging in
+  ## extrapolation. The cluster-robust coefficient variance is left as-is.
+  field_var    <- rowSums(Z_pv^2)
+  sill         <- as.numeric(var(rowSums(Z)))            # marginal field var (link) ceiling
+  if(!is.finite(sill) || sill <= 0) sill <- Inf
+  ## Binomial: the logit-scale field signal is weak (binary data => small sill),
+  ## so the cap binds too early and suppresses growth. Disable it for binomial
+  ## (the response is already bounded in [0, 1]).
+  if(identical(family$family, "binomial")) sill <- Inf
+  tau          <- 1
+  idt          <- mod_hv$id_train
+  if(!is.null(idt) && length(idt) < n && !is.null(mod_hv$other$pred)){
+    val        <- setdiff(seq_len(n), idt)
+    ## in-sample working residual of the full model (field absorbed in eta) -> noise floor
+    eta_f      <- .spcf_clip_l(pred_lin, family); me_f <- family$mu.eta(eta_f)
+    v_f        <- pmax(family$variance(pred), 1e-8)
+    r_f        <- (y - pred) / ifelse(abs(me_f) < 1e-8, 1e-8, me_f)
+    w_f        <- me_f^2 / v_f
+    self       <- okf <- is.finite(r_f) & is.finite(w_f) & w_f > 0 & (seq_len(n) %in% idt)
+    sig2       <- if(any(self)) sum(w_f[self]*r_f[self]^2)/sum(w_f[self]) else 0
+    ## holdout (out-of-sample) working residual at the validation samples
+    mu_h       <- switch(family$family,
+                         binomial = pmin(pmax(mod_hv$other$pred, 1e-6), 1-1e-6),
+                         poisson  = pmax(mod_hv$other$pred, 1e-8), mod_hv$other$pred)
+    eta_h      <- .spcf_clip_l(family$linkfun(mu_h), family); me_h <- family$mu.eta(eta_h)
+    v_h        <- pmax(family$variance(mu_h), 1e-8)
+    r_h        <- (y - mu_h) / ifelse(abs(me_h) < 1e-8, 1e-8, me_h)
+    w_h        <- me_h^2 / v_h
+    okv        <- (seq_len(n) %in% val) & is.finite(r_h) & is.finite(w_h) & w_h > 0 &
+                  is.finite(field_var) & field_var > 0
+    if(sum(okv) >= 2){
+      Wv       <- w_h[okv]
+      verr     <- sum(Wv * r_h[okv]^2) / sum(Wv)
+      vfld     <- sum(Wv * field_var[okv]) / sum(Wv)
+      num      <- verr - sig2
+      se       <- sqrt(2 / sum(okv)) * verr
+      rel      <- if(num > 0 && is.finite(se) && se > 0) num^2 / (num^2 + se^2) else 0
+      tau_raw  <- if(vfld > 0) max(num, 1e-6) / vfld else 1
+      tau      <- min(max(exp(log(tau_raw) * rel), 1e-2), 1e2)
+      if(!is.finite(tau)) tau <- 1
+    }
+  }
+
+  ## Report per-scale spatial SD (Z_sd / Z0_sd, used by sp_scalewise) on the same
+  ## pv/tau/sill footing as pred_lin_sd, so they grow away from data and saturate
+  ## at the sill (rowSums(Z_sd^2) == calibrated field variance, link scale).
+  fv_cal       <- pmin(tau * field_var, sill)
+  Z_sd         <- Z_pv * sqrt(ifelse(field_var > 0, fv_cal / field_var, 1))
+
+  ## opt+field coefficient covariance (default se_method): recomputed here, once
+  ## the calibrated per-point field SD s_f = sqrt(fv_cal) is available, replacing
+  ## the classic field-retained cluster-robust covariance above. Overwrites the
+  ## reported SEs and the coefficient-uncertainty term of the predictive SE.
+  if(robust_se && se_method=="opt" && !is.null(bands) && length(bands)>0){
+    ofse <- tryCatch(.spcf_optfield_SE(y=y, X=x, beta=beta_int, field=b,
+                                       s_f=sqrt(fv_cal), offset=offset,
+                                       family=family, coords=coords, bands=bands),
+                     error=function(e) NULL)
+    if(!is.null(ofse) && all(is.finite(diag(ofse$V))) && all(diag(ofse$V) > 0)){
+      beta_int_vmat <- ofse$V
+      beta_int_se   <- sqrt(diag(ofse$V))
+      beta_int_summ <- data.frame(coef=beta_int, coef_se=beta_int_se,
+                                  lower_95CI=beta_int-1.96*beta_int_se,
+                                  upper_95CI=beta_int+1.96*beta_int_se)
+    }
+  }
+
+  pred_lin_sd  <- sqrt( rowSums((x %*% beta_int_vmat) * x ) + fv_cal)
   pred_sd      <- response_se(pred_lin=pred_lin, pred_lin_sd=pred_lin_sd, family=family)
 
   pred_q       <- predict(gmod,type="link") + outer(pred_lin_sd, qnorm(qs), "*")
@@ -346,10 +478,13 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
 
   if(!is.null(coords0)){
     pred0_lin   <- predict(gmod,type="link",newdata=gmod0_dat)
-    pred0_lin_sd<- sqrt( rowSums((x0 %*% beta_int_vmat)* x0) + rowSums(Z0_sd^2))
+    field_var0  <- rowSums(Z0_pv^2)
+    fv0_cal     <- pmin(tau * field_var0, sill)
+    Z0_sd       <- Z0_pv * sqrt(ifelse(field_var0 > 0, fv0_cal / field_var0, 1))
+    pred0_lin_sd<- sqrt( rowSums((x0 %*% beta_int_vmat)* x0) + fv0_cal)
     pred0_sd    <- response_se(pred_lin=pred0_lin, pred_lin_sd=pred0_lin_sd, family=family)
 
-    pred0_q    <- predict(gmod,type="link",newdata=gmod0_dat) + outer(pred0_sd, qnorm(qs), "*")  #### offset?
+    pred0_q    <- predict(gmod,type="link",newdata=gmod0_dat) + outer(pred0_lin_sd, qnorm(qs), "*")
     pred0_q    <- data.frame( inv_link_fun(pred0_q,family=family) )
     names(pred0_q)<- paste("q", qs,sep="")
     #pred0_sim  <- sample_from_qrf(pred0_q, qs = qs, n=n0, n_draw=100)# Crossing?
@@ -395,26 +530,41 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
   row.names(sd_summary)<-NULL
 
   ######### error statistics
-  y_test         <- y[-mod_hv$id_train]
-  y_pred         <- pred[-mod_hv$id_train]
-  gmod_null      <- glm(y_test~1,family=family)
-  y_pred_tr      <- link_fun(y_pred, family=family)
-  gmod_fix       <- glm(y_test~0 + offset(y_pred_tr),family=family) ##################### log(y_pred)??????
-  r2             <- 1 - gmod_fix$deviance / gmod_null$null.deviance# Deviance-based R2
-  rmse           <- sqrt( mean( ( y_test - y_pred )^2 ) )
-  mae            <- abs( mean( ( y_test - y_pred ) ) )
+  ## Evaluated on the holdout validation samples using cf_glm_hv's out-of-sample
+  ## prediction (other$pred), so the pseudo-R2, RMSE, and MAE are genuine
+  ## holdout metrics rather than in-sample fits at the validation indices. All NA
+  ## when no validation samples are available (e.g. train_rat = 1).
+  ival           <- setdiff(seq_len(n), mod_hv$id_train)
+  r2 <- rmse <- mae <- NA_real_
+  if(length(ival) >= 2 && !is.null(mod_hv$other$pred)){
+    y_test       <- y[ival]
+    y_pred       <- mod_hv$other$pred[ival]
+    gmod_null    <- glm(y_test~1,family=family)
+    y_pred_tr    <- link_fun(y_pred, family=family)
+    gmod_fix     <- glm(y_test~0 + offset(y_pred_tr),family=family) ##################### log(y_pred)??????
+    r2           <- 1 - gmod_fix$deviance / gmod_null$null.deviance# Deviance-based R2
+    rmse         <- sqrt( mean( ( y_test - y_pred )^2 ) )
+    mae          <- mean( abs( y_test - y_pred ) )
+  }
   e_summary      <- data.frame(stat=c("validation_Pseudo-R2", "validation_RMSE","validation_MAE"),
                                value=c(r2, rmse, mae))
 
   ######### summary outputs
   other          <- list(n=n,n0=n0,nx=nx,y=y,x=x,x0=x0,VCmat=VCmat, #a_mod=a_mod,
                          coords=coords,coords0=coords0,vc=mod_hv$other$vc,
-                         pred_pre=pred_pre, loss_hv=mod_hv$loss_hv)
+                         pred_pre=pred_pre, loss_hv=mod_hv$loss_hv, tau=tau)
   result         <- list(beta=beta_int_summ, sd_summary=sd_summary,
                          e_summary=e_summary, pred=pred_ms,pred0=pred0_ms,
                          pred_q=pred_q,pred0_q=pred0_q, bands=bands,
                          Z=Z,Z_sd=Z_sd, Z0=Z0, Z0_sd=Z0_sd, other=other,
                          call = match.call() )
+  if(identical(se_type,"prediction")){
+    ob <- tryCatch(.spcf_obs_predict(family=family, y=y, mod_hv=mod_hv,
+                     pred_in=result$pred$pred, predq_in=result$pred_q,
+                     pred_out=result$pred0$pred, predq_out=result$pred0_q),
+                   error=function(e) NULL)
+    result <- .spcf_apply_obs(result, ob)
+  } else result$other$se_type <- "mean"
   class( result )<- "cf_glm"
   return( result )
 }
@@ -424,12 +574,12 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
 print.cf_glm <- function(x, ...)
   {
     cat("Call:\n")
-    print(x$call)
+    message(format(x$call))
     cat("\n---- Coefficients -------------------------------------\n")
-    print(x$beta)
+    message(format(x$beta))
     cat("\n---- Deviance losses (influential elements only) ------\n")
-    print(x$sd_summary)
+    message(format(x$sd_summary))
     cat("\n---- Error statistics ---------------------------------\n")
-    print(x$e_summary)
+    message(format(x$e_summary))
     invisible(x)
   }

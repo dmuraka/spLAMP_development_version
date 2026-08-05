@@ -1,7 +1,7 @@
 Package: spCF
 Type: Package
-Title: Coarse-to-Fine Spatial Modeling
-Version: 0.1.1
+Title: Coarse-to-Fine Spatial and Spatio-Temporal Modeling
+Version: 0.2.0
 Authors@R: c(
     person("Daisuke",  "Murakami",   email = "dmuraka@ism.ac.jp",
            role = c("aut", "cre")) ,
@@ -9,13 +9,23 @@ Authors@R: c(
     person("Takahiro", "Yoshida",    role = "aut"),
     person("Narumasa", "Tsutsumida", role = "aut"),
     person("Chris",    "Brunsdon",   role = "aut"),
-    person("Tomoki",   "Nakaya",     role = "aut"))
-Imports: FNN, fields, nloptr, dbscan, ranger, withr, Rcpp
+    person("Tomoki",   "Nakaya",     role = "aut"),
+    person("Jose Luis", "Blanco-Claraco", role = c("ctb", "cph"),
+           comment = "Author of the bundled 'nanoflann' C++ library (src/nanoflann.h)"),
+    person("Marius", "Muja", role = "cph",
+           comment = "Copyright holder of the bundled 'nanoflann' C++ library"),
+    person(c("David", "G."), "Lowe", role = "cph",
+           comment = "Copyright holder of the bundled 'nanoflann' C++ library"))
+Depends: R (>= 4.1.0)
+Imports: FNN, fields, nloptr, dbscan, withr, Matrix, Rcpp
 LinkingTo: Rcpp
-Suggests: sp, sf, knitr, rmarkdown, CARBayesdata
-Description: Provides functions for coarse-to-fine spatial modeling (CFSM), enabling fast spatial prediction, regression, and uncertainty quantification. This method is suitable for moderate to large samples. For further details, see Murakami et al. (2026) <doi:10.1111/gean.70034>.
-License: GPL (>=2)
+Suggests: sp, sf, knitr, rmarkdown, CARBayesdata, ranger, lightgbm, shiny,
+    bslib, leaflet, terra, testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Description: Provides functions for coarse-to-fine spatial and spatio-temporal modeling, enabling fast prediction, regression, and uncertainty quantification for moderate to large datasets. For methodological details, see Murakami et al. (2026) <doi:10.1111/gean.70034> and related work on generalized linear, downscaling, and dynamic spatio-temporal extensions.
+URL: https://github.com/dmuraka/spCF
+BugReports: https://github.com/dmuraka/spCF/issues
+License: GPL (>= 2)
 Encoding: UTF-8
-LazyData: true
-RoxygenNote: 7.3.3
 VignetteBuilder: knitr
+Config/roxygen2/version: 8.0.0

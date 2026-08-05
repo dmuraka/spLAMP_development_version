@@ -25,47 +25,54 @@ cf_lm_hv(
 
 \item{train_rat}{Training sample ratio (default: 0.75). For small to
 moderate samples (N <= 30000), samples closest to the k-means centers
-are used for validation samples. For larger samples, training
-samples are drawn at random.}
+are used for validation samples to stabilize training.
+For larger samples, training samples are drawn at random.}
 
-\item{id_train}{Optional. If specified, the corresponding samples are used
-as training samples. Otherwise, training samples are chosen based on
-`train_rat`.}
+\item{id_train}{Optional. ID indicating training samples. If specified,
+the corresponding samples are used as training samples.
+Otherwise, training samples are chosen based on `train_rat`.}
 
 \item{alpha}{Decay ratio of the kernel bandwidth in the coarse-to-fine
-training (default: 0.9). As it approaches one, the optimization becomes
-more stringent but requires longer computation time.}
+training (default: 0.9). Values closer to one make the optimization
+more stringent but increase computation time.}
 
 \item{kernel}{Kernel type for modeling spatial dependence. `"exp"` for the
 exponential kernel (default) and `"gau"` for the Gaussian kernel.}
 
-\item{add_learn}{If `"rf"`, random forest is additionally trained to capture
-non-linear patterns and/or higher-order interactions.
+\item{add_learn}{Additional learner trained on the residuals to capture
+non-linear patterns and/or higher-order interactions. `"rf"` uses a
+random forest (\pkg{ranger}) and `"lightgbm"` uses LightGBM
+(\pkg{lightgbm}); both are tuned by minimizing validation SSE.
+For `"lightgbm"`, the predictive quantiles are conformalized on the
+validation split so that their uncertainty is calibrated.
+Both learners are optional: the corresponding package
+(\pkg{ranger} or \pkg{lightgbm}) must be installed, and an informative
+error is raised if it is not.
 Default is `"none"`, meaning no additional training.}
 
 \item{seed}{Random seed used for the training/validation split when
-`id_train` is not supplied. Defaults to `123`, which makes the split
-reproducible across calls. Set to `NULL` to allow each call to draw a
-different split (useful for assessing sensitivity to the split).}
+`id_train` is not supplied. Default is `123`. Set to `NULL` to allow
+a different split at each call (useful for assessing split sensitivity).}
 }
 \value{
 A list with the following elements:
 \describe{
-  \item{sse_hv}{Sum-of-squared error (SSE) for validation samples.}
-  \item{sse_hv_all}{All the SSEs obtained in each learning step.}
+  \item{sse_hv}{Final sum-of-squared error (SSE) for validation samples.}
+  \item{sse_hv_all}{SSEs obtained at each learning step.}
   \item{id_train}{ID of training samples.}
-  \item{other}{List of other outcomes, which are internally used.}
+  \item{other}{Other internally used output objects.}
 }
 }
 \description{
-Trains the CFSM-based Gaussian spatial regression and optimizes the number of
+Trains the CFSM-based Gaussian spatial regression and selects the number of
 spatial scales through sequential holdout validation.
 }
 \references{
 Murakami, D., Comber, A., Yoshida, T., Tsutsumida, N., Brunsdon, C.,
-& Nakaya, T. (2025).
-Coarse-to-fine spatial GLMMs for scalable prediction and multiscale analysis.
-*ArXiv*.
+& Nakaya, T. (2026). Coarse-to-fine spatial modeling:
+A scalable, machine-learning-compatible framework.
+*Geographical Analysis*, 58(2), e70034.
+https://onlinelibrary.wiley.com/doi/10.1111/gean.70034
 }
 \seealso{
 \code{\link{cf_lm}}

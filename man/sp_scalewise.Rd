@@ -4,33 +4,48 @@
 \alias{sp_scalewise}
 \title{Extract scale-wise spatial processes}
 \usage{
-sp_scalewise(mod, bw_range = c(0, Inf))
+sp_scalewise(mod, bw_range = c(0, Inf), time_range = c(-Inf, Inf))
 }
 \arguments{
-\item{mod}{Output object from the \code{\link{cf_lm}} or
-\code{\link{cf_glm}} function.}
+\item{mod}{Output object from the \code{\link{cf_lm}}, \code{\link{cf_glm}} or
+\code{\link{cf_dglm}} function.}
 
-\item{bw_range}{Range of bandwidth values of the simulated spatial processes.
-For example, if bw_range = c(10, 20), spatial processes with bandwidths
-between 10 and 20 are synthesized and simulated. The default is c(0, Inf),
-which synthesizes all scales.}
+\item{bw_range}{Range of bandwidth values of the synthesized spatial
+processes, treated as the half-open interval [min, max). For example,
+bw_range = c(10, 20) synthesizes scales with bandwidth b such that
+10 <= b < 20. The half-open convention lets contiguous ranges (e.g.
+c(0, 10) and c(10, Inf)) partition the scales without double-counting a
+scale whose bandwidth equals the shared endpoint. The default c(0, Inf)
+synthesizes all scales.}
+
+\item{time_range}{Range of time points over which the spatio-temporal process
+is averaged. Only used when \code{mod} is a \code{\link{cf_dglm}} fit (which
+carries a time index for every row of \code{Z}). For example, time_range =
+c(5, 10) averages the process over time points 5 to 10 at each location. The
+default c(-Inf, Inf) averages over all time points. Ignored (with a warning
+if set to a non-default value) for purely spatial fits.}
 }
 \value{
 A list with the following elements:
 \describe{
-  \item{pred}{Means and standard deviations of the spatial process
-  (sample sites).}
-  \item{pred0}{Means and standard deviations of the spatial process
-  (prediction sites). \code{NULL} when \code{mod} was fitted without
-  prediction sites.}
+  \item{pred}{Means and standard deviations of the spatial process at the
+  sample sites. For a \code{cf_dglm} fit, one row per (unique) location with
+  the temporally averaged process, together with its coordinates and the
+  number of averaged time points.}
+  \item{pred0}{The same at the prediction sites. \code{NULL} when \code{mod}
+  was fitted without prediction sites, and also (with a warning) when no
+  prediction site falls inside \code{time_range}.}
 }
 }
 \description{
-Evaluate mean and variance of the spatial process with bandwidth values
-within a pre-specified range
+Evaluate mean and standard deviation of the (multiscale) spatial process for
+bandwidth values within a pre-specified range. For a spatio-temporal fit from
+\code{\link{cf_dglm}}, the process can additionally be averaged over a
+user-specified time range, returning the temporally averaged spatial process
+at each (sample / prediction) location.
 }
 \seealso{
-\code{\link{cf_lm}}, \code{\link{cf_glm}}
+\code{\link{cf_lm}}, \code{\link{cf_glm}}, \code{\link{cf_dglm}}
 }
 \author{
 Daisuke Murakami

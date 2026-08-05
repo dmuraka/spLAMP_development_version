@@ -1,44 +1,51 @@
 #' Holdout validation for the Gaussian coarse-to-fine spatial modeling (CFSM)
 #'
-#' Trains the CFSM-based Gaussian spatial regression and optimizes the number of
+#' Trains the CFSM-based Gaussian spatial regression and selects the number of
 #' spatial scales through sequential holdout validation.
 #'
 #' @param y Vector of response variables (N x 1).
 #' @param x Matrix of covariates (N x K).
 #' @param coords Matrix of 2-dimensional point coordinates (N x 2).
 #' @param train_rat Training sample ratio (default: 0.75). For small to
-#' moderate samples (N <= 30000), samples closest to the k-means centers
-#' are used for validation samples. For larger samples, training
-#' samples are drawn at random.
-#' @param id_train Optional. If specified, the corresponding samples are used
-#'   as training samples. Otherwise, training samples are chosen based on
-#'   `train_rat`.
+#'   moderate samples (N <= 30000), samples closest to the k-means centers
+#'   are used for validation samples to stabilize training.
+#'   For larger samples, training samples are drawn at random.
+#' @param id_train Optional. ID indicating training samples. If specified,
+#'   the corresponding samples are used as training samples.
+#'   Otherwise, training samples are chosen based on `train_rat`.
 #' @param alpha Decay ratio of the kernel bandwidth in the coarse-to-fine
-#'   training (default: 0.9). As it approaches one, the optimization becomes
-#'   more stringent but requires longer computation time.
+#'   training (default: 0.9). Values closer to one make the optimization
+#'   more stringent but increase computation time.
 #' @param kernel Kernel type for modeling spatial dependence. `"exp"` for the
-#' exponential kernel (default) and `"gau"` for the Gaussian kernel.
-#' @param add_learn If `"rf"`, random forest is additionally trained to capture
-#'   non-linear patterns and/or higher-order interactions.
+#'   exponential kernel (default) and `"gau"` for the Gaussian kernel.
+#' @param add_learn Additional learner trained on the residuals to capture
+#'   non-linear patterns and/or higher-order interactions. `"rf"` uses a
+#'   random forest (\pkg{ranger}) and `"lightgbm"` uses LightGBM
+#'   (\pkg{lightgbm}); both are tuned by minimizing validation SSE.
+#'   For `"lightgbm"`, the predictive quantiles are conformalized on the
+#'   validation split so that their uncertainty is calibrated.
+#'   Both learners are optional: the corresponding package
+#'   (\pkg{ranger} or \pkg{lightgbm}) must be installed, and an informative
+#'   error is raised if it is not.
 #'   Default is `"none"`, meaning no additional training.
 #' @param seed Random seed used for the training/validation split when
-#'   `id_train` is not supplied. Defaults to `123`, which makes the split
-#'   reproducible across calls. Set to `NULL` to allow each call to draw a
-#'   different split (useful for assessing sensitivity to the split).
+#'   `id_train` is not supplied. Default is `123`. Set to `NULL` to allow
+#'   a different split at each call (useful for assessing split sensitivity).
 #'
 #' @return A list with the following elements:
 #' \describe{
-#'   \item{sse_hv}{Sum-of-squared error (SSE) for validation samples.}
-#'   \item{sse_hv_all}{All the SSEs obtained in each learning step.}
+#'   \item{sse_hv}{Final sum-of-squared error (SSE) for validation samples.}
+#'   \item{sse_hv_all}{SSEs obtained at each learning step.}
 #'   \item{id_train}{ID of training samples.}
-#'   \item{other}{List of other outcomes, which are internally used.}
+#'   \item{other}{Other internally used output objects.}
 #' }
 #'
 #' @references
 #' Murakami, D., Comber, A., Yoshida, T., Tsutsumida, N., Brunsdon, C.,
-#' & Nakaya, T. (2025).
-#' Coarse-to-fine spatial GLMMs for scalable prediction and multiscale analysis.
-#' *ArXiv*.
+#' & Nakaya, T. (2026). Coarse-to-fine spatial modeling:
+#' A scalable, machine-learning-compatible framework.
+#' *Geographical Analysis*, 58(2), e70034.
+#' https://onlinelibrary.wiley.com/doi/10.1111/gean.70034
 #'
 #' @seealso \code{\link{cf_lm}}
 #' @author Daisuke Murakami
@@ -46,6 +53,9 @@
 #' @export
 cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
                          alpha=0.9, kernel="exp", add_learn="none", seed=123){
+  n_obs         <- .spcf_check_data(y = y, x = x, coords = coords)
+  .spcf_check_hv_args(n_obs, train_rat, id_train, alpha, kernel, add_learn)
+
   init          <- initial_fun(y=y,x=x,coords=coords,train_rat=train_rat,
                                id_train=id_train, x_sel=NULL, seed=seed)
   xx_inv        <- init$xx_inv
@@ -74,12 +84,12 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
   sel_id_list   <- list(NULL)
   b_old         <- NULL
   bands         <- NULL
-  print("--- SSE: Linear regression ---", quote = FALSE)
+  message("--- SSE: Linear regression ---")
   SSE           <- sum( resid[-id_train]^2 )
   SSE_name      <- "linear regression"
-  print(SSE)
+  message(format(SSE))
 
-  print("--- SSE: Learning multi-scale spatial process ---", quote = FALSE)
+  message("--- SSE: Learning multi-scale spatial process ---")
   count         <- 0
   VCmat         <- NULL
   for(i in 1:length(Bands)){
@@ -127,8 +137,8 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
 
     SSE_name    <- c(SSE_name, paste0("scale ",i))
     print_add   <- ifelse(i<10,"  "," ")
-    print( paste0( formatC(SSE[length(SSE)], digits = 7, format = "g"),#, flag = "#"
-                   " (Scale",print_add, i,")", comment), quote = FALSE )
+    message( paste0( formatC(SSE[length(SSE)], digits = 7, format = "g"),#, flag = "#"
+                   " (Scale",print_add, i,")", comment))
   }
 
   nonzero_Z_sd    <- apply(Z,2,sd)>0
@@ -138,11 +148,10 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
     Z             <- Z[,1:max_bid, drop=FALSE]
     n_bid         <- length(bid)
 
-    print("", quote=FALSE)
-    print(paste("-> Selected finest scale: ", max_bid, " (bandwidth: ",
-                formatC(Bands[max_bid], digits = 7, format = "g"),")", sep=""),
-          quote = FALSE)
-    print("", quote=FALSE)
+    message("")
+    message(paste("-> Selected finest scale: ", max_bid, " (bandwidth: ",
+                formatC(Bands[max_bid], digits = 7, format = "g"),")", sep=""))
+    message("")
   } else {
     bid           <- NULL
     Z             <- NULL
@@ -150,7 +159,7 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
   }
 
   if(n_bid>1){
-    print("--- SSE: After coefficient adjustment ---", quote = FALSE)
+    message("--- SSE: After coefficient adjustment ---")
     ZZ          <- Z[,bid]
     bopt_obj    <- (function(bands, ZZ, beta_int, nx,#, is_vc
                              x, y, n_bid, id_train) {
@@ -206,11 +215,11 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
   SSE_name      <- c(SSE_name, "coef. adjustment")
 
   if(n_bid>1){
-    print(formatC(sse_hv, digits = 7),quote=FALSE)
+    message(formatC(sse_hv, digits = 7))
   }
 
-  if(add_learn=="rf"){
-    print("--- SSE: After additional learning ---", quote = FALSE)
+  if(add_learn=="rf" || add_learn=="lightgbm"){
+    message("--- SSE: After additional learning ---")
     a_mod0      <- add_mod(add_learn=add_learn, train=TRUE, resid=resid, x=x,
                          coords=coords, x0=NULL, coords0=NULL,id_train=id_train,
                          nx=nx, xname=xname, sse_hv=sse_hv)
@@ -218,7 +227,7 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
     SSE         <- c(SSE,sse_hv)
     SSE_name    <- c(SSE_name, "additional learning")
 
-    print(formatC(sse_hv, digits = 7),quote=FALSE)
+    message(formatC(sse_hv, digits = 7))
   } else if(add_learn=="none"){
     a_mod0      <- list(a_par=NA, a_run=FALSE, add_learn=add_learn)
   }
@@ -226,9 +235,19 @@ cf_lm_hv     <- function(y, x=NULL, coords, train_rat=0.75, id_train=NULL,
   sse_hv_all    <- data.frame(learning=SSE_name, sse_hv=SSE)
 
   ##################### summary
+  ## Holdout prediction of the selected model at all samples. On the validation
+  ## samples (complement of id_train) this is out-of-sample, so cf_lm uses it to
+  ## report a genuine holdout validation_R2 consistent with the holdout SSE
+  ## (sse_hv). The additional learner's validation prediction (if any) is folded
+  ## in at the validation samples so pred_hv matches sse_hv after add_learn.
+  pred_hv       <- pred
+  if(isTRUE(a_mod0$a_run) && !is.null(a_mod0$a_pred_hv)){
+    pred_hv[-id_train] <- pred_hv[-id_train] + a_mod0$a_pred_hv
+  }
   other         <- list(bands=bands,bands_all=Bands,vpar=vpar,alpha=alpha,ridge=ridge,
                         vc=vc,x_sel=x_sel, sel_id_list=sel_id_list,
-                        coords_uni=coords_uni,VCmat=VCmat,kernel=kernel, a_mod0=a_mod0)
+                        coords_uni=coords_uni,VCmat=VCmat,kernel=kernel, a_mod0=a_mod0,
+                        pred_hv=pred_hv)
   result        <- list(sse_hv=sse_hv, sse_hv_all=sse_hv_all,
                         id_train=id_train, other=other, call = match.call())
   class( result ) <- "cf_lm_hv"

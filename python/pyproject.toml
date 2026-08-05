@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spCF"
-version = "0.1.1"
+version = "0.1.4"
 description = "Coarse-to-fine spatial modeling (Python port of R package spCF)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "numpy>=1.21",
+    "numpy>=1.22",
     "scipy>=1.7",
     "scikit-learn>=1.0",
     "statsmodels>=0.13",

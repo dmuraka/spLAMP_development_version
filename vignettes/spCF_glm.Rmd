@@ -2,7 +2,7 @@
 title: "Coarse-to-fine spatial GLMM: Application examples"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{spCF_glm}
+  %\VignetteIndexEntry{Coarse-to-fine spatial GLMM: Application examples}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 references:
@@ -126,7 +126,7 @@ plot(GGHB.IZ[,c("pred")],lwd=0.01,axes=TRUE, key.pos=4,nbreaks=50)
 
 # Predictive SD
 GGHB.IZ$pred_sd<- mod$pred$pred_sd
-plot(GGHB.IZ[,c("pred_sd")],pal = hcl.colors(9, "Viridis"), lwd=0.01, 
+plot(GGHB.IZ[,c("pred_sd")],pal = function(n) hcl.colors(n, "Viridis"), lwd=0.01, 
      axes=TRUE, key.pos=4)
 ```
 
@@ -226,7 +226,7 @@ st_crs(meuse.grid_sf)     <- 28992
 meuse.grid_sf$pred        <- mod$pred0$pred   # Predictive mean
 meuse.grid_sf$pred_sd     <- mod$pred0$pred_sd# Predictive standard deviations
 plot(meuse.grid_sf[,"pred"], border = NA, nbreaks = 20, key.pos=4,axes=TRUE)
-plot(meuse.grid_sf[,"pred_sd"], pal = hcl.colors(9, "Viridis"),
+plot(meuse.grid_sf[,"pred_sd"], pal = function(n) hcl.colors(n, "Viridis"),
      border = NA,key.pos=4,axes=TRUE)
 ```
 
@@ -246,5 +246,21 @@ meuse.grid_sf$z1    <- mod_s1$pred0$pred
 meuse.grid_sf$z2    <- mod_s2$pred0$pred
 plot(meuse.grid_sf[,c("z1","z2")], border=NA, nbreaks=20, key.pos=4, axes=TRUE)
 ```
+
+## Interactive mapping
+
+The maps above are static. `spCFmap()` opens a Shiny application that draws the same results over a basemap. Without arguments it launches the full application, whose bundled demo data include *meuse* and the Greater Glasgow health data used in the two examples above:
+
+```{r, eval = FALSE}
+spCFmap()
+```
+
+Passing a fitted model maps that object directly, with `crs` naming the coordinate reference system of the coordinates given to the model. For the binary example above the coordinates are in the Dutch RD grid (EPSG:28992), and for the count example in the British National Grid (EPSG:27700):
+
+```{r, eval = FALSE}
+spCFmap(mod, crs = 28992)   # the flood-probability model of Example 2
+```
+
+A model fitted without prediction sites -- as in Example 1, where `cf_glm` was called without `x0`/`coords0` -- is mapped at its sample sites instead, so both examples can be explored this way.
 
 ### Reference

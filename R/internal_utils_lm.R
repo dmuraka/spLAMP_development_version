@@ -11,41 +11,149 @@ add_mod <- function(add_learn="rf", train=TRUE, resid, x, coords, x0=NULL, coord
   a_data          <- data.frame(resid=resid, x[,-1], coords)
   a_xname         <- names(a_data)[-1] <- c(xname[-1],"px","py")
   if(add_learn=="rf"){
+    if(!requireNamespace("ranger", quietly=TRUE)){
+      stop("add_learn = \"rf\" requires the 'ranger' package. ",
+           "Install it with install.packages(\"ranger\").", call. = FALSE)
+    }
     if( train ){
       a_run       <- FALSE
       a_par       <- data.frame(mtry=NA, min.node.size=NA)
+      a_pred_hv   <- NULL
       mtry_all    <- c( round((nx+1)/5), round((nx+1)/3), round((nx+1)/2))
       param_grid  <- expand.grid(mtry=unique(mtry_all), min.node.size=c(1,5,10))
       param_grid  <- rbind(data.frame(mtry=NA, min.node.size=NA), param_grid)
       for (i in 2:nrow(param_grid)){
         params    <- param_grid[i, ]
-        rf_mod    <- ranger(formula=resid~., data=a_data[id_train,],
+        rf_mod    <- ranger::ranger(formula=resid~., data=a_data[id_train,],
                             classification=FALSE, probability=FALSE,
                             verbose=FALSE, mtry=params$mtry, num.trees=500,
                             min.node.size=params$min.node.size)
-        resid_rf  <- resid[-id_train] - predict(rf_mod, data=a_data[-id_train,])$predictions
+        ## Validation prediction of the additional learner (already needed for
+        ## the SSE); retained for the best candidate to feed cf_lm_hv's pred_hv.
+        pred_rf   <- predict(rf_mod, data=a_data[-id_train,])$predictions
+        resid_rf  <- resid[-id_train] - pred_rf
         sse_rf    <- sum(resid_rf^2)
         if(sse_rf < sse_hv){
           sse_hv  <- sse_rf
           a_par   <- params
           a_run   <- TRUE
+          a_pred_hv <- pred_rf
         }
       }
-      return(list(sse_hv=sse_hv, a_par=a_par, a_run=a_run, add_learn=add_learn))
+      return(list(sse_hv=sse_hv, a_par=a_par, a_run=a_run, add_learn=add_learn,
+                  a_pred_hv=a_pred_hv))
     } else {
-      mod         <- ranger(formula=resid~., data=a_data, quantreg=TRUE,
+      mod         <- ranger::ranger(formula=resid~., data=a_data, quantreg=TRUE,
                             classification=FALSE, probability=FALSE,
                             verbose=FALSE, mtry=a_par$mtry, num.trees=500,
                             min.node.size=a_par$min.node.size)
       pred        <- mod$predictions
       pred0       <- 0
+      ## quantile predictions used downstream to derive the additional-learning
+      ## predictive variance (see sample_from_qrf()).
+      qlevels     <- seq(0, 1, length.out = 201)
+      qmat        <- predict(mod, data=a_data, type="quantiles",
+                             quantiles=qlevels)$predictions
+      qmat0       <- NULL
       if(!is.null(coords0)){
         a_data0       <- data.frame(x0[,-1], coords0)
         names(a_data0)<- a_xname
         pred0         <- predict(mod, data=a_data0)$predictions
+        qmat0         <- predict(mod, data=a_data0, type="quantiles",
+                                 quantiles=qlevels)$predictions
       }
-      return(list(mod=mod, pred=pred, pred0=pred0, a_xname=a_xname, add_learn=add_learn))
+      return(list(mod=mod, pred=pred, pred0=pred0, qmat=qmat, qmat0=qmat0,
+                  qlevels=qlevels, a_xname=a_xname, add_learn=add_learn))
     }
+
+  } else if(add_learn=="lightgbm"){
+    if(!requireNamespace("lightgbm", quietly=TRUE)){
+      stop("add_learn = \"lightgbm\" requires the 'lightgbm' package. ",
+           "Install it with install.packages(\"lightgbm\").", call. = FALSE)
+    }
+    X               <- as.matrix(a_data[, a_xname])
+    yv              <- a_data$resid
+    if( train ){
+      ## Tune once on a point-prediction (L2) objective via validation SSE,
+      ## mirroring the rf tuning. The chosen hyper-parameters (and the
+      ## early-stopped number of rounds) are reused for the quantile models.
+      Xtr         <- X[id_train, , drop=FALSE]; ytr <- yv[id_train]
+      Xva         <- X[-id_train, , drop=FALSE]; yva <- yv[-id_train]
+      dtrain      <- lightgbm::lgb.Dataset(Xtr, label=ytr)
+      dvalid      <- lightgbm::lgb.Dataset.create.valid(dtrain, Xva, label=yva)
+      grid        <- expand.grid(num_leaves=c(15,31,63), learning_rate=c(0.05,0.1))
+      a_run       <- FALSE
+      a_pred_hv   <- NULL
+      a_par       <- list(num_leaves=31, learning_rate=0.1,
+                          min_data_in_leaf=20, feature_fraction=0.9, nrounds=100,
+                          train_frac=1)
+      for(i in 1:nrow(grid)){
+        params    <- list(objective="regression", num_leaves=grid$num_leaves[i],
+                          learning_rate=grid$learning_rate[i], min_data_in_leaf=20,
+                          feature_fraction=0.9, verbosity=-1, num_threads=0L)
+        gbm       <- lightgbm::lgb.train(params, dtrain, nrounds=800,
+                                         valids=list(valid=dvalid), eval="l2",
+                                         early_stopping_rounds=30, verbose=-1L)
+        ## Score on the explicit validation prediction (raw features) rather than
+        ## gbm$best_score (computed on binned features), so the selected sse_hv
+        ## matches the stored validation prediction exactly.
+        pred_va   <- predict(gbm, Xva, num_iteration=gbm$best_iter)
+        sse_gbm   <- sum((yva - pred_va)^2)
+        if(sse_gbm < sse_hv){
+          sse_hv  <- sse_gbm
+          ## train_frac records how much of the data the early stopping saw, so
+          ## the final all-data refit can scale the round budget accordingly.
+          a_par   <- list(num_leaves=grid$num_leaves[i],
+                          learning_rate=grid$learning_rate[i], min_data_in_leaf=20,
+                          feature_fraction=0.9, nrounds=gbm$best_iter,
+                          train_frac=length(id_train)/nrow(X))
+          a_run   <- TRUE
+          a_pred_hv <- pred_va
+        }
+      }
+      return(list(sse_hv=sse_hv, a_par=a_par, a_run=a_run, add_learn=add_learn,
+                  a_pred_hv=a_pred_hv))
+    } else {
+      base_par    <- list(num_leaves=a_par$num_leaves,
+                          learning_rate=a_par$learning_rate,
+                          min_data_in_leaf=a_par$min_data_in_leaf,
+                          feature_fraction=a_par$feature_fraction,
+                          verbosity=-1, num_threads=0L)
+      ## The tuned nrounds was early-stopped on the training split only, while
+      ## the final models below see all n rows. Scale the round budget by the
+      ## same factor so the refit is not systematically under-trained
+      ## (train_frac is absent in objects fitted by earlier versions: keep the
+      ## stored budget then).
+      tfrac       <- if(is.null(a_par$train_frac)) 1 else a_par$train_frac
+      nrounds_all <- max(1L, as.integer(ceiling(a_par$nrounds / tfrac)))
+      ## Point predictions: trained on all data, as ranger does.
+      dall        <- lightgbm::lgb.Dataset(X, label=yv)
+      pmod        <- lightgbm::lgb.train(c(base_par, list(objective="regression")),
+                                         dall, nrounds=nrounds_all, verbose=-1L)
+      pred        <- predict(pmod, X)
+      X0          <- NULL; pred0 <- 0
+      if(!is.null(coords0)){
+        a_data0       <- data.frame(x0[,-1], coords0)
+        names(a_data0)<- a_xname
+        X0            <- as.matrix(a_data0[, a_xname])
+        pred0         <- predict(pmod, X0)
+      }
+      ## Quantile predictions (raw, trained on all data like ranger). The
+      ## combined predictive distribution is calibrated downstream by the total
+      ## CQR step in cf_lm(); no component-level conformalization here.
+      qlevels     <- c(.025, .05, .1, .25, .5, .75, .9, .95, .975)
+      dq          <- lightgbm::lgb.Dataset(X, label=yv)
+      qmods       <- lapply(qlevels, function(a)
+        lightgbm::lgb.train(c(base_par, list(objective="quantile", alpha=a)),
+                            dq, nrounds=nrounds_all, verbose=-1L))
+      qpred       <- function(M) t(apply(sapply(qmods, predict, M), 1, sort))
+      qmat        <- qpred(X)
+      qmat0       <- NULL
+      if(!is.null(coords0)) qmat0 <- qpred(X0)
+      return(list(mod=qmods, pred=pred, pred0=pred0, qmat=qmat, qmat0=qmat0,
+                  qlevels=qlevels, a_xname=a_xname, add_learn=add_learn))
+    }
+
   } else if(add_learn=="none"){
     if( train ){
       return(list(sse_hv=sse_hv, a_par=NA, a_run=FALSE, add_learn=add_learn))
@@ -53,6 +161,39 @@ add_mod <- function(add_learn="rf", train=TRUE, resid, x, coords, x0=NULL, coord
       return(list(mod=NA, pred=0, pred0=0, add_learn=add_learn))
     }
   }
+}
+
+#' Split-conformal (CQR) offsets for symmetric quantile pairs.
+#'
+#' For each pair (q, 1-q) with q < 0.5, returns the additive half-width that
+#' makes the calibrated interval reach its nominal coverage on the held-out
+#' set. The median (q = 0.5) receives a zero offset.
+#' @keywords internal
+#' @noRd
+cqr_offsets <- function(Qcal, ycal, qlevels){
+  ncal   <- length(ycal)
+  off    <- rep(0, length(qlevels))
+  for(j in which(qlevels < 0.5)){
+    k    <- which(abs(qlevels - (1 - qlevels[j])) < 1e-9)
+    if(length(k) != 1) next
+    nominal <- 1 - 2*qlevels[j]
+    E    <- pmax(Qcal[, j] - ycal, ycal - Qcal[, k])
+    lvl  <- min(ceiling((ncal + 1) * nominal) / ncal, 1)
+    Q    <- max(as.numeric(quantile(E, lvl, type=1)), 0)
+    off[j] <- Q; off[k] <- Q
+  }
+  off
+}
+
+#' Apply CQR offsets, widening lower quantiles down and upper quantiles up.
+#' @keywords internal
+#' @noRd
+apply_cqr <- function(Q, qlevels, off){
+  for(j in seq_along(qlevels)){
+    if(qlevels[j] < 0.5)      Q[, j] <- Q[, j] - off[j]
+    else if(qlevels[j] > 0.5) Q[, j] <- Q[, j] + off[j]
+  }
+  t(apply(Q, 1, sort))
 }
 
 #' @keywords internal
@@ -63,9 +204,26 @@ sample_from_qrf <- function(rf_qmat, qs, n, n_draw = 100) {
   for (i in 1:n) {
     qi   <- rf_qmat[i, ]
     if (is.unsorted(qi)) qi <- sort(qi)
-    draws[i, ] <- approx(x = qs, y = qi, xout = U[i, ], ties = "ordered")$y
+    draws[i, ] <- approx(x = qs, y = qi, xout = U[i, ], ties = "ordered",
+                         rule = 2)$y
   }
   draws
+}
+
+#' Total predictive quantiles: convolve the Gaussian core (mean \code{pred},
+#' standard deviation \code{core_sd}) with the centered additional-learning
+#' residual distribution (drawn from \code{qmat} at levels \code{qlevels_in}),
+#' then take empirical quantiles at \code{qlevels_out}. \code{qmat}'s own mean
+#' is removed because it is already included in \code{pred}.
+#' @keywords internal
+#' @noRd
+total_qmat <- function(pred, core_sd, qmat, qlevels_in, qlevels_out, n_draw = 400){
+  n   <- length(pred)
+  A   <- sample_from_qrf(qmat, qlevels_in, n, n_draw)
+  A   <- A - rowMeans(A)
+  G   <- matrix(rnorm(n * n_draw), nrow = n, ncol = n_draw) * core_sd
+  tot <- pred + G + A
+  t(apply(tot, 1, quantile, probs = qlevels_out, type = 7, names = FALSE))
 }
 
 #' @keywords internal
@@ -233,64 +391,44 @@ lwr <- function(coords, coords_uni, resid, x, band, b_old, vc,
     for(i in 1:nx) B_var[,i] <- mean(b_old[,i]^2)
   }
 
-  ################# accumulators
+  ################# accumulators via the fused nanoflann kernel (LM: is_lm=1)
   n0 <- 0L
   if(!is.null(coords0)) n0 <- nrow(coords0)
 
-  id_train_flag           <- logical(n)
-  id_train_flag[id_train] <- TRUE
+  id_train_int            <- integer(n)
+  id_train_int[id_train]  <- 1L
   vc_int                  <- as.integer(vc)
 
-  b_all        <- matrix(0, n, nx)
-  bv_inv_all   <- matrix(0, n, nx)
-  pv_inv_all   <- matrix(0, n, nx)
-  b_old        <- matrix(0, length(sel_list), nx)
+  ## Fused kernel (src/lwr_chunk_glm_fused.cpp, is_lm=1): builds a kd-tree over
+  ## `coords` (and `coords0`) ONCE and does radius-search -> local LM ->
+  ## scatter-add per knot inline, WITHOUT materialising the neighbour lists.
+  ## With unit weights and is_lm=1 (variance over all neighbours / (m-1)) this
+  ## is numerically identical to the frNN + lwr_chunk_cpp path (~1e-13), at much
+  ## lower peak memory.
+  fres <- lwr_glm_fused_cpp(
+    coords       = coords,
+    coords_cent  = matrix(coords_cent, ncol = 2),
+    resid        = as.numeric(resid),
+    w_obs        = rep(1, n),
+    x            = x,
+    id_train     = id_train_int,
+    B_var        = B_var,
+    vc_cols      = vc_int,
+    band         = band,
+    kernel_id    = kernel_id,
+    threshold    = threshold,
+    is_lm        = 1L,
+    coords0_sexp = if(!is.null(coords0)) as.matrix(coords0) else NULL,
+    x0_sexp      = if(!is.null(coords0)) x0 else NULL)
+  b_all        <- fres$b_all
+  bv_inv_all   <- fres$bv_inv_all
+  pv_inv_all   <- fres$pv_inv_all
+  b_old        <- fres$b_old
   b_all0 <- bv_inv_all0 <- pv_inv_all0 <- NULL
   if (!is.null(coords0)) {
-    b_all0      <- matrix(0, n0, nx)
-    bv_inv_all0 <- matrix(0, n0, nx)
-    pv_inv_all0 <- matrix(0, n0, nx)
-  }
-
-  ## Process sel_list in chunks to cap peak neighbor-list memory at
-  ## O(chunk_size * avg_neighbors). The C++ kernel accumulates in place.
-  chunk_size   <- max(1L, min(length(sel_list),
-                              as.integer(ceiling(1e8 / max(n, 1L)))))
-  chunk_starts <- seq.int(1L, length(sel_list), by = chunk_size)
-
-  for (cs in chunk_starts) {
-    ce         <- min(cs + chunk_size - 1L, length(sel_list))
-    sel_chunk  <- sel_list[cs:ce]
-    query      <- coords_cent[sel_chunk, , drop = FALSE]
-    dbnn       <- frNN(x = coords, query = query, eps = threshold, sort = FALSE)
-    dbnn0      <- NULL
-    if (!is.null(coords0)) {
-      dbnn0 <- frNN(x = coords0, query = query, eps = threshold, sort = FALSE)
-    }
-
-    lwr_chunk_cpp(
-      nb_id            = dbnn$id,
-      nb_dist          = dbnn$dist,
-      nb_id0_sexp      = if(!is.null(coords0)) dbnn0$id   else NULL,
-      nb_dist0_sexp    = if(!is.null(coords0)) dbnn0$dist else NULL,
-      sel_chunk        = as.integer(sel_chunk),
-      id_train_flag    = id_train_flag,
-      resid            = as.numeric(resid),
-      x                = x,
-      x0_sexp          = if(!is.null(coords0)) x0 else NULL,
-      B_var            = B_var,
-      vc_cols          = vc_int,
-      band             = band,
-      kernel_id        = kernel_id,
-      b_all            = b_all,
-      bv_inv_all       = bv_inv_all,
-      pv_inv_all       = pv_inv_all,
-      b_all0_sexp      = if(!is.null(coords0)) b_all0      else NULL,
-      bv_inv_all0_sexp = if(!is.null(coords0)) bv_inv_all0 else NULL,
-      pv_inv_all0_sexp = if(!is.null(coords0)) pv_inv_all0 else NULL,
-      b_old            = b_old
-    )
-    rm(dbnn); if (!is.null(coords0)) rm(dbnn0)
+    b_all0      <- fres$b_all0
+    bv_inv_all0 <- fres$bv_inv_all0
+    pv_inv_all0 <- fres$pv_inv_all0
   }
 
   ################# selection of vc through CV
@@ -322,6 +460,13 @@ lwr <- function(coords, coords_uni, resid, x, band, b_old, vc,
     bv_all[, -vc]   <- NA
     bv_all[is.nan(bv_all)] <- Inf
 
+    ## Predictive variance per eq. (10): pred_se^2 = 1 / sum_k (w_k / pv_k),
+    ## where pv_inv_all = sum_k (w_k / pv_k). Unlike the coefficient variance
+    ## bv_all, this grows as the location moves away from data (all w_k -> 0).
+    pv_all          <- 1/pv_inv_all
+    pv_all[, -vc]   <- NA
+    pv_all[is.nan(pv_all)] <- Inf
+
     pred            <- rowSums(x * b_all)
     if( !is.null(coords0) ){
       bv_all0         <- bv_inv_all0
@@ -334,14 +479,18 @@ lwr <- function(coords, coords_uni, resid, x, band, b_old, vc,
       bv_all0[, vc]    <- 1/bv_inv_all0[, vc]
       bv_all0[, -vc]   <- NA
       bv_all0[is.nan(bv_all0)] <- Inf
+      pv_all0          <- 1/pv_inv_all0
+      pv_all0[, -vc]   <- NA
+      pv_all0[is.nan(pv_all0)] <- Inf
       pred0            <- rowSums(x0 * b_all0)
     } else {
-      b_all0 <- bv_all0 <- pred0 <- NULL
+      b_all0 <- bv_all0 <- pv_all0 <- pred0 <- NULL
     }
 
-    return(list(beta=b_all, beta_v=bv_all, pred=pred, sel_id=sel_id,
+    return(list(beta=b_all, beta_v=bv_all, beta_pv=pv_all, pred=pred, sel_id=sel_id,
                 coords_cent=coords_cent, beta0=b_all0, beta0_v=bv_all0,
-                pred0=pred0, b_old=b_old, run=run, sse_hv=sse_hv, vc_sel=vc))
+                beta0_pv=pv_all0, pred0=pred0, b_old=b_old, run=run,
+                sse_hv=sse_hv, vc_sel=vc))
   } else {
     return(list(run=FALSE))
   }

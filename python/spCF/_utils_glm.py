@@ -334,6 +334,11 @@ def lwr_glm(
     bv_all[:, not_vc_mask] = np.nan
     bv_all[np.isnan(bv_inv_all)] = np.inf
 
+    # Predictive variance per eq.(10) on the link scale: 1 / sum_k (w_k / pv_k).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pv_all = np.where(pv_inv_all != 0, 1.0 / pv_inv_all, np.inf)
+    pv_all[:, not_vc_mask] = np.nan
+
     if has0:
         with np.errstate(divide="ignore", invalid="ignore"):
             b_all0[:, vc_int] = np.where(
@@ -356,18 +361,23 @@ def lwr_glm(
                 np.inf,
             )
         bv_all0[:, not_vc_mask] = np.nan
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pv_all0 = np.where(pv_inv_all0 != 0, 1.0 / pv_inv_all0, np.inf)
+        pv_all0[:, not_vc_mask] = np.nan
         pred0 = np.sum(x0 * b_all0, axis=1)
     else:
-        b_all0 = bv_all0 = pred0 = None
+        b_all0 = bv_all0 = pv_all0 = pred0 = None
 
     return {
         "beta": b_all,
         "beta_v": bv_all,
+        "beta_pv": pv_all,
         "pred": pred,
         "sel_id": sel_id_out,
         "coords_cent": coords_cent,
         "beta0": b_all0,
         "beta0_v": bv_all0,
+        "beta0_pv": pv_all0,
         "pred0": pred0,
         "b_old": b_old_out,
         "run": True,

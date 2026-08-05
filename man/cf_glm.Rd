@@ -12,19 +12,22 @@ cf_glm(
   x0 = NULL,
   coords0 = NULL,
   offset0 = NULL,
-  mod_hv
+  mod_hv,
+  robust_se = TRUE,
+  se_type = c("prediction", "mean"),
+  se_method = c("opt", "classic")
 )
 }
 \arguments{
-\item{y}{Vector of response variables (N x 1) including continuous, count,
-and binary responses, following an exponential family distribution.}
+\item{y}{Vector of response variables (N x 1), including continuous, count,
+and binary responses following an exponential family distribution.}
 
 \item{x}{Matrix of covariates (N x K).}
 
 \item{coords}{Matrix of 2-dimensional point coordinates (N x 2).}
 
-\item{offset}{Optional. Vector of offset variable (N x 1) to be included
-in the linear predictor. It is consistent with that of \code{\link{glm}}.}
+\item{offset}{Optional. Vector of offset variables (N x 1) included
+in the linear predictor, consistent with \code{\link{glm}}.}
 
 \item{x0}{Optional. Matrix of covariates at prediction sites (N0 x K).}
 
@@ -35,6 +38,29 @@ prediction sites (N0 x 2).}
 (N0 x 1)}
 
 \item{mod_hv}{Output object of the \code{\link{cf_glm_hv}} function.}
+
+\item{robust_se}{If \code{TRUE} (default), coefficient standard errors
+and predictive uncertainty are computed using a cluster-robust sandwich
+estimator accounting for local spatial correlation.
+Set \code{FALSE} to use naive SEs (not recommended).}
+
+\item{se_type}{Type of predictive uncertainty in \code{pred}/\code{pred_q}.
+\code{"prediction"} (default) returns the OBSERVATION predictive for a new
+data point, holdout-calibrated on the \code{cf_glm_hv} validation samples
+(Gaussian: mean uncertainty + residual variance, split-conformal SD
+scaling; Poisson: negative-binomial count predictive; binomial: temperature
+-calibrated probability with \code{pred_sd = sqrt(p(1-p))}). The mean/signal
+versions are kept in \code{pred_signal}/\code{pred_q_signal}.
+\code{"mean"} returns the signal (mean) uncertainty only (previous
+behaviour). See \code{other$calibration} for the fitted calibration.}
+
+\item{se_method}{Cluster-robust coefficient-SE estimator (used when
+\code{robust_se = TRUE}). \code{"opt"} (default) splits the sandwich
+meat into a field-removed observation-noise part and a field part that adds
+the calibrated field variance back with a within-block \code{exp(-d/h)}
+correlation (\code{h} = median committed bandwidth); this is near-nominal. A refit-free leverage leave-one-out ceiling then caps the field term, preventing over-coverage for count (Poisson) responses while leaving already-calibrated families unchanged.
+\code{"classic"} keeps the realised field inside the working residual (the
+previous behaviour), which is valid but conservative.}
 }
 \value{
 A list with the following elements:
@@ -44,9 +70,13 @@ A list with the following elements:
   \item{sd_summary}{Standard deviation of the regression term (xb), spatial
   process (spatial_scale1, spatial_scale2,...),
   additional learning, and residuals.}
-  \item{e_summary}{Error statistics for the validation samples: pseudo
-  R-squared, root mean squared error (RMSE), and mean absolute error (MAE).}
-  \item{pred}{Predictive means and standard deviations (sample sites).}
+  \item{e_summary}{Holdout validation accuracy evaluated on the validation
+  samples: R-squared (validation_Pseudo-R2), root mean squared error
+  (validation_RMSE), and mean absolute error (validation_MAE).}
+  \item{pred}{Predictive means and standard deviations (sample sites). The
+  spatial-process contribution to the predictive SD is rescaled by a
+  holdout-calibrated factor (stored as \code{other$tau}) estimated on the
+  validation samples.}
   \item{pred0}{Predictive means and standard deviations (prediction sites).}
   \item{pred_q}{Predictive quantiles on the response scale at the sample
   sites. A data frame whose columns \code{q0.005}, \code{q0.025},
@@ -57,21 +87,21 @@ A list with the following elements:
   \item{pred0_q}{Predictive quantiles on the response scale at the
   prediction sites. Column structure is identical to \code{pred_q}.
   \code{NULL} when prediction sites are not supplied.}
-  \item{bands}{Bandwidth values for each scale. The i-th bandwidth is used
-  for the spatial process corresponding to the i-th column of the Z matrix.}
-  \item{Z}{Predictive mean of the spatial process in each scale
+  \item{bands}{Bandwidth values for each scale. The i-th bandwidth
+  corresponds to the i-th column of the Z matrix.}
+  \item{Z}{Predictive mean of the spatial process at each scale
   (sample sites; list).}
-  \item{Z_sd}{Predictive standard deviation of the spatial process in each
+  \item{Z_sd}{Predictive standard deviation of the spatial process at each
   scale (sample sites; list).}
-  \item{Z0}{Predictive mean of the spatial process in each scale
+  \item{Z0}{Predictive mean of the spatial process at each scale
   (prediction sites; list).}
-  \item{Z0_sd}{Predictive standard deviation of the spatial process in each
+  \item{Z0_sd}{Predictive standard deviation of the spatial process at each
   scale (prediction sites; list).}
-  \item{Other}{Other internal output objects.}
+  \item{other}{Other internally used output objects.}
 }
 }
 \description{
-Prediction and regression via CF-GLMMs.
+Scalable prediction, regression, and multiscale analysis via CF-GLMMs.
 }
 \examples{
 ################ Example 1: Count data modeling/Disease mapping/smoothing
@@ -108,6 +138,9 @@ mod_s2      <- sp_scalewise(mod,bw_range=c(0,4000))   # Small scale (bandwidth <
 GGHB.IZ$z1  <- mod_s1$pred$pred
 GGHB.IZ$z2  <- mod_s2$pred$pred
 plot(GGHB.IZ[,c("z1","z2")],lwd=0.2,axes=TRUE,key.pos=4, nbreaks=50)# Extracted features
+
+### The same fit, explored interactively over a basemap
+# spCFmap(mod, crs = 27700)   # crs = the system the coordinates are in
 
 
 ################ Example 2: Binary data modeling/spatial prediction
@@ -148,13 +181,17 @@ meuse.grid_sf$z2    <- mod_s2$pred0$pred
 plot(meuse.grid_sf[,c("z1","z2")], pch = 15,
      cex = 0.5, nbreaks = 20,axes=TRUE) # Predictive means
 
+### The same fit, explored interactively over a basemap
+# spCFmap(mod, crs = 28992)   # crs = the system the coordinates are in
+
 
 }
 \references{
 Murakami, D., Comber, A., Yoshida, T., Tsutsumida, N., Brunsdon, C.,
 & Nakaya, T. (2025).
 Coarse-to-fine spatial GLMMs for scalable prediction and multiscale analysis.
-*ArXiv*.
+*ArXiv preprint*, 2605.01157.
+https://doi.org/10.48550/arXiv.2605.01157
 }
 \seealso{
 \code{\link{cf_glm_hv}}, \code{\link{sp_scalewise}}

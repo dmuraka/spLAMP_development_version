@@ -1,0 +1,270 @@
+---
+title: "Coarse-to-fine dynamic space-time modeling: An application example"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Coarse-to-fine dynamic space-time modeling: An application example}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+references:
+  - id: murakami2026cfsm
+    type: article-journal
+    author:
+      - family: Murakami
+        given: Daisuke
+      - family: Comber
+        given: Alexis
+      - family: Yoshida
+        given: Takahiro
+      - family: Tsutsumida
+        given: Narumasa
+      - family: Brunsdon
+        given: Chris
+      - family: Nakaya
+        given: Tomoki
+    title: "Coarse-to-fine spatial modeling: A scalable, machine-learning-compatible framework"
+    container-title: Geographical Analysis
+    issued:
+      year: 2026
+    volume: 58
+    issue: 2
+    page: e70034
+  - id: murakami2026cfsm-glm
+    type: report
+    author:
+      - family: Murakami
+        given: Daisuke
+      - family: Comber
+        given: Alexis
+      - family: Yoshida
+        given: Takahiro
+      - family: Tsutsumida
+        given: Narumasa
+      - family: Brunsdon
+        given: Chris
+      - family: Nakaya
+        given: Tomoki
+    title: "Coarse-to-fine spatial GLMM for scalable prediction and multiscale analysis"
+    issued:
+      year: 2026
+    archive: ArXiv
+  - id: murakami2026cfsm-dglm
+    type: report
+    author:
+      - family: Murakami
+        given: Daisuke
+    title: "Fast covariance-free spatiotemporal modeling via coarse-to-fine learning"
+    issued:
+      year: 2026
+    archive: ArXiv
+---
+
+```{=html}
+<style>
+figure, img {
+  border: none !important;
+  box-shadow: none !important;
+}
+</style>
+```
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+This vignette demonstrates space-time prediction and multiscale analysis using the dynamic extension of the coarse-to-fine spatial modeling (CFSM) framework. As in the purely spatial case [@murakami2026cfsm; @murakami2026cfsm-glm], the space-time process is a sum of scale-wise processes learned sequentially from coarser to finer scales, and the number of scales is selected by holdout validation. See @murakami2026cfsm-dglm for the dynamic extension used here. Each scale additionally couples a per-knot AR(1) process in time with kernel kriging in space, so the same model yields maps at individual time points, temporally averaged patterns, and forecasts at time points that were never observed.
+
+## Data and setup
+
+Let us load the required packages
+
+```{r setup}
+library(spCF)
+library(sf)
+```
+
+The example data are the monthly air quality panel shipped with the package, which is also the *Demo (air, space-time)* data set of the `spCFmap()` application. It contains monthly mean PM10 concentrations (µg/m³) recorded at 63 background monitoring stations in Germany from January 2001 to December 2005:
+
+```{r}
+air <- read.csv(system.file("shiny", "spCFmap", "example_spacetime_air.csv",
+                            package = "spCF"))
+str(air)
+```
+
+The `time` column indexes the 60 months (1 = January 2001, 60 = December 2005). The panel is unbalanced: stations enter and leave the network, so only 2,769 of the 63 x 60 = 3,780 possible station-month combinations are observed. CFSM does not require a balanced panel, nor does it require the same locations to be observed at every time point.
+
+```{r}
+range(table(air$station))                    # observations per station
+```
+
+The station coordinates are given as longitude/latitude. Because the kernels used by CFSM are distance based, we project them to UTM zone 32N (EPSG:25832), whose unit is the metre, so that the selected bandwidths are readable as distances:
+
+```{r}
+pts    <- st_as_sf(air, coords = c("lon", "lat"), crs = 4326)
+coords <- st_coordinates(st_transform(pts, 25832))
+colnames(coords) <- c("px", "py")
+```
+
+PM10 has a pronounced annual cycle, which is a fixed effect rather than a spatial one. We therefore describe it with a pair of seasonal harmonics and let the space-time process capture the remaining structure:
+
+```{r}
+y    <- air$pm10                                    # response
+time <- air$time                                    # time index
+x    <- data.frame(sin12 = sin(2 * pi * air$month / 12),
+                   cos12 = cos(2 * pi * air$month / 12))
+```
+
+The station means over the five years are plotted as follows:
+
+```{r, fig.width=4.5, fig.height=4.5}
+loc          <- air[!duplicated(air$station), c("station", "lon", "lat")]
+loc$pm10_ave <- tapply(air$pm10, air$station, mean)[loc$station]
+loc_sf       <- st_as_sf(loc, coords = c("lon", "lat"), crs = 4326)
+plot(loc_sf[, "pm10_ave"], pch = 20, cex = 1.3, axes = TRUE,
+     key.pos = 4, nbreaks = 20)
+```
+
+## Coarse-to-fine dynamic spatial GLMM (CF-DGLM)
+
+The `cf_dglm_hv` function performs the holdout validation that selects the number of spatial scales. It is used exactly like `cf_lm_hv` and `cf_glm_hv`, with the addition of the `time` argument:
+
+```{r}
+mod_hv <- cf_dglm_hv(y = y, x = x, coords = coords, time = time)
+```
+
+As the output shows, the validation deviance decreases as learning proceeds from the coarsest scale to finer ones and the loop terminates once further scales stop improving it. The temporal parameters (the AR(1) coefficient and its innovation variance) are estimated inside this step; `rho` and `Q` may also be fixed by the user.
+
+Next we define the sites at which predictions are required. Here we use a regular 25 km grid covering the convex hull of the monitoring network:
+
+```{r}
+uni   <- unique(as.data.frame(coords))
+hull  <- st_convex_hull(st_union(st_as_sf(uni, coords = c("px", "py"))))
+gcen  <- st_make_grid(hull, cellsize = 25000, what = "centers")
+gcen  <- gcen[st_intersects(gcen, hull, sparse = FALSE)[, 1]]
+gxy   <- st_coordinates(gcen)
+nrow(gxy)
+```
+
+Every prediction site needs a time point as well as coordinates. We ask for three of them: January 2005 (`time = 49`) and July 2005 (`time = 55`), which are both observed, and January 2006 (`time = 61`), which lies beyond the end of the data and is therefore a forecast. The seasonal covariates are evaluated at the corresponding months:
+
+```{r}
+tp      <- c(49, 55, 61)                            # Jan-2005, Jul-2005, Jan-2006
+month0  <- c(1, 7, 1)
+ng      <- nrow(gxy)
+coords0 <- do.call(rbind, replicate(length(tp), gxy, simplify = FALSE))
+time0   <- rep(tp, each = ng)
+x0      <- data.frame(sin12 = sin(2 * pi * rep(month0, each = ng) / 12),
+                      cos12 = cos(2 * pi * rep(month0, each = ng) / 12))
+```
+
+The full model is then trained with `cf_dglm`:
+
+```{r}
+mod <- cf_dglm(y = y, x = x, coords = coords, time = time,
+               x0 = x0, coords0 = coords0, time0 = time0, mod_hv = mod_hv)
+```
+
+The estimated regression coefficients, the standard deviations of the model elements, and the error statistics are displayed as follows:
+
+```{r}
+mod
+```
+
+The seasonal coefficients confirm the expected annual cycle, and the scale-wise standard deviations show that most of the space-time variation is carried by the coarsest scales. The space-time parameters printed above are specific to `cf_dglm`: `rho` is the AR(1) coefficient of the scale-wise processes at the monthly step (values near one indicate a persistent field, values near zero a field that is re-drawn every month once the seasonal fixed effect has been removed), `Q` is its innovation variance, and `tau` is the holdout-calibrated multiplier applied to the field variance. They are also available individually as `mod$other$rho`, `mod$other$Q` and `mod$other$tau`.
+
+The selected bandwidths are stored in the fitted object:
+
+```{r}
+round(mod$bands / 1000, 1)      # bandwidth of each accepted scale, in km
+```
+
+## Space-time prediction
+
+### Predictive values at observed time points
+
+The predictive means at the grid cells are extracted by subsetting `pred0` with `time0`. January and July of 2005 are mapped side by side:
+
+```{r, fig.width=7.5, fig.height=4}
+grid_sf         <- st_as_sf(as.data.frame(gxy), coords = c("X", "Y"))
+grid_sf$Jan2005 <- mod$pred0$pred[time0 == 49]
+grid_sf$Jul2005 <- mod$pred0$pred[time0 == 55]
+plot(grid_sf[, c("Jan2005", "Jul2005")], pch = 15, cex = 1.9,
+     axes = TRUE, key.pos = 4, nbreaks = 20)
+```
+
+The January map is far more structured than the July one, with a pronounced maximum in the north-west of the network, whereas July is close to flat. The annual cycle itself is carried by the seasonal covariates, so what the space-time process adds on top of it is a winter-specific spatial gradient rather than a uniform seasonal shift. The predictive standard deviations are mapped in the same way:
+
+```{r, fig.width=4.5, fig.height=4.5}
+grid_sf$Jan2005_sd <- mod$pred0$pred_sd[time0 == 49]
+plot(grid_sf[, "Jan2005_sd"], pch = 15, cex = 1.9, axes = TRUE, key.pos = 4,
+     pal = function(n) hcl.colors(n, "Viridis"))
+```
+
+Uncertainty is smallest near the monitoring stations and grows towards the edges of the network, as expected.
+
+### Forecasting an unobserved time point
+
+`time0` may contain time points that carry no observations. Interior gaps are interpolated and time points beyond the last observed one are forecast, in both cases through the AR(1) predict step of each scale. January 2006 was requested above, so its map is already available:
+
+```{r, fig.width=7.5, fig.height=4}
+grid_sf$Jan2006 <- mod$pred0$pred[time0 == 61]
+plot(grid_sf[, c("Jan2005", "Jan2006")], pch = 15, cex = 1.9,
+     axes = TRUE, key.pos = 4, nbreaks = 20)
+```
+
+The forecast keeps the seasonal fixed effect but the spatial field is pulled towards its mean, because no data are available to update it. The predictive standard deviation reflects this honestly:
+
+```{r}
+tapply(mod$pred0$pred_sd, time0, mean)
+```
+
+The average predictive SD is markedly larger at the forecast month than at the two observed months. Adding a future time point does not alter the fit itself: the accepted bandwidths and the training-time predictions are unchanged.
+
+## Multiscale space-time pattern extraction
+
+As in the spatial case, `sp_scalewise` synthesizes the scale-wise processes whose bandwidths fall inside a given range. For a `cf_dglm` fit it additionally averages over a time window, given by `time_range`, and returns one row per location:
+
+```{r}
+mod_l <- sp_scalewise(mod, bw_range = c(150000, Inf))   # large scale (>= 150 km)
+mod_s <- sp_scalewise(mod, bw_range = c(0, 150000))     # small scale (< 150 km)
+head(mod_l$pred, 3)
+```
+
+The `n_time` column records how many time points were averaged at each location. Using `time_range`, the large-scale process can be compared between seasons; here we average the three winter months of 2005 and the three summer months of the same year:
+
+```{r, fig.width=7.5, fig.height=4}
+win <- sp_scalewise(mod, bw_range = c(150000, Inf), time_range = c(49, 51))
+smr <- sp_scalewise(mod, bw_range = c(150000, Inf), time_range = c(55, 57))
+sea <- st_as_sf(data.frame(win$pred[, c("px", "py")],
+                           winter = win$pred$pred,
+                           summer = smr$pred$pred),
+                coords = c("px", "py"))
+plot(sea[, c("winter", "summer")], pch = 20, cex = 1.2,
+     axes = TRUE, key.pos = 4, nbreaks = 20)
+```
+
+The large-scale process is far more structured in winter than in summer, which is consistent with the seasonal contrast seen in the predictive maps. Note that `time_range` must contain at least one time point of each site set present in the fit: because the prediction grid above was requested only at months 49, 55 and 61, a window such as `c(1, 12)` would select no prediction site and raise an error.
+
+Setting `time_range` to its default, `c(-Inf, Inf)`, averages over all 60 months and gives the time-averaged multiscale decomposition, which is the direct space-time analogue of the decomposition produced for `cf_lm` and `cf_glm` fits.
+
+## Interactive mapping
+
+The maps above are static. The same results can be explored over a basemap with `spCFmap()`, which has two modes.
+
+Called without arguments, it opens the full application, where this data set is available as *Demo (air, space-time)*. The response (`pm10`), the coordinates (`lon`, `lat`) and the time index (`time`) are pre-selected, so the model can be fitted, mapped and exported as CSV or GeoJSON without writing code. The seasonal harmonics used above are not columns of the file, so the app fits the space-time process without covariates; user data can of course be uploaded with any covariates already present as columns.
+
+```{r, eval = FALSE}
+spCFmap()
+```
+
+Passing a fitted model maps that object directly, with the layer (predictive mean, predictive SD, covariate effect, or a scale-wise component), the colour scaling and — for a `cf_dglm` fit — the time range and the bandwidth range chosen interactively:
+
+```{r, eval = FALSE}
+spCFmap(mod, crs = 25832)
+```
+
+The `crs` argument states the reference system of the coordinates that were passed to the model, so that the results can be placed on the longitude/latitude basemap. An EPSG code is enough as long as the coordinates are in the unit of that CRS, which is why the projected coordinates were kept in metres above; a proj/WKT string may be given instead, for instance if the coordinates have been rescaled.
+
+### Reference
