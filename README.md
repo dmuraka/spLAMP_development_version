@@ -25,6 +25,11 @@ Key features:
 - **Spatial downscaling** (`cf_downscale`) that disaggregates aggregate-level
   responses to a finer grid under a pycnophylactic (mass-preserving) constraint,
   with a GLMM extension (`cf_dglm`) for count/spatiotemporal data.
+- **Verifiable predictive intervals**: predictions default to the
+  holdout-calibrated *observation* predictive (`se_type="prediction"`) so
+  `pred_q` covers new observations — Gaussian conformal, Poisson
+  negative-binomial, binomial temperature scaling — together with opt+field
+  cluster-robust coefficient standard errors (`se_method="opt"`).
 
 ## Repository layout
 
@@ -43,7 +48,7 @@ spCF/
 ### R
 
 ```r
-# CRAN (when published)
+# CRAN
 install.packages("spCF")
 
 # Or the development version straight from GitHub:
@@ -116,7 +121,8 @@ See the R walk-throughs in
 [`vignettes/spCF_downscale.Rmd`](vignettes/spCF_downscale.Rmd), and
 [`vignettes/spCF_dglm.Rmd`](vignettes/spCF_dglm.Rmd),
 and [`python/README.md`](python/README.md) for Python-specific notes
-(including the three `sd_method` options for predictive SD).
+(including the `sd_method`, `se_type`, and `se_method` options that control the
+predictive SD and coefficient-SE estimators).
 
 ## Citation
 
