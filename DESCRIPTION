@@ -1,7 +1,7 @@
 Package: spCF
 Type: Package
 Title: Coarse-to-Fine Spatial and Spatio-Temporal Modeling
-Version: 0.2.0
+Version: 0.2.1
 Authors@R: c(
     person("Daisuke",  "Murakami",   email = "dmuraka@ism.ac.jp",
            role = c("aut", "cre")) ,
@@ -28,4 +28,4 @@ BugReports: https://github.com/dmuraka/spCF/issues
 License: GPL (>= 2)
 Encoding: UTF-8
 VignetteBuilder: knitr
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.0

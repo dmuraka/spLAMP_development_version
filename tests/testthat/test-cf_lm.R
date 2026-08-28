@@ -74,3 +74,23 @@ test_that("id_train is honoured and the split is reproducible", {
   h3  <- quiet(cf_lm_hv(y = d$y, x = d$x, coords = d$coords, seed = 42))
   expect_equal(h2$id_train, h3$id_train)
 })
+
+test_that("print() shows tables, not deparsed columns", {
+  ## print.cf_lm once used message(format(df)). format() hands back a
+  ## data.frame, message() flattens it with as.character(), and each column came
+  ## out deparsed as c("...", "..."). expect_output(print(m)) still passed,
+  ## because the cat() section headers kept reaching stdout -- so check what is
+  ## actually printed, and that it reaches stdout at all.
+  d  <- sim_spatial(n = 120)
+  hv <- quiet(cf_lm_hv(y = d$y, x = d$x, coords = d$coords))
+  m  <- quiet(cf_lm(y = d$y, x = d$x, coords = d$coords, mod_hv = hv))
+
+  out <- capture.output(print(m))
+  expect_false(any(grepl('c("', out, fixed = TRUE)))
+  expect_true(any(grepl("Intercept", out)))
+  expect_true(any(grepl("validation_R2", out)))
+  expect_true(any(grepl("residuals", out)))
+  ## every section must land on stdout, not stderr
+  expect_true(any(grepl("Coefficients", out)))
+  expect_true(any(grepl("Error statistics", out)))
+})

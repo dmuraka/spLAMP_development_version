@@ -83,6 +83,14 @@ demo_ds_info <- c(.sf_to_xydf(sf::st_read("example_downscale.geojson",
 # space-time set for cf_dglm. Bundled as a CSV so no runtime dependency.
 demo_st <- utils::read.csv("example_spacetime_air.csv")
 
+# ---- Worked examples offered next to each upload box -------------------------
+# The package ships a filled-in file for every kind of upload; handing one to the
+# user answers "what should my file look like?" better than any prose, and it can
+# be uploaded straight back to try the whole flow. The directory is captured now
+# because a downloadHandler's content() runs much later, when the working
+# directory is no longer guaranteed to be the app's own.
+EXAMPLE_DIR <- normalizePath(".", mustWork = FALSE)
+
 # ---- UI ----------------------------------------------------------------------
 ui <- page_sidebar(
   title = "spCFmap — Interactive coarse-to-fine spatial mapping",
@@ -118,6 +126,11 @@ ui <- page_sidebar(
                       "(CSV / GeoJSON)")),
                     multiple = TRUE,
                     accept = c(".csv", ".geojson", ".json")),
+          div(class = "small text-muted",
+              style = "margin-top:-14px;margin-bottom:8px",
+              "Example: ", downloadLink("dl_ex_samples", "CSV"), " \u00b7 ",
+              downloadLink("dl_ex_points", "GeoJSON"), " \u00b7 ",
+              downloadLink("dl_ex_pt_readme", "ReadMe")),
           fileInput("f_grid",
                     tagList("Prediction grid ", tags$span(
                       class = "text-muted", style = "font-size:.8em",
@@ -126,7 +139,10 @@ ui <- page_sidebar(
                     accept = c(".csv", ".geojson", ".json")),
           div(class = "small text-muted",
               style = "margin-top:-14px;margin-bottom:8px",
-              "No prediction grid → auto-build a grid.")
+              "Example: ", downloadLink("dl_ex_grid", "CSV"), " \u00b7 ",
+              downloadLink("dl_ex_grid_geo", "GeoJSON"), " \u00b7 ",
+              downloadLink("dl_ex_pt_readme2", "ReadMe"), tags$br(),
+              "No prediction grid \u2192 auto-build a grid.")
         ),
         uiOutput("col_map")
       )
@@ -151,6 +167,9 @@ ui <- page_sidebar(
                     accept = c(".csv", ".geojson", ".json")),
           div(class = "small text-muted",
               style = "margin-top:-14px;margin-bottom:8px",
+              "Example: ", downloadLink("dl_ex_ds", "CSV"), " \u00b7 ",
+              downloadLink("dl_ex_ds_geo", "GeoJSON"), " \u00b7 ",
+              downloadLink("dl_ex_ds_readme", "ReadMe"), tags$br(),
               "Disaggregate-level units; give an area ID + area-level response.")
         ),
         uiOutput("col_map_ds")
@@ -211,15 +230,15 @@ ui <- page_sidebar(
   ),
   layout_columns(
     col_widths = 12,
-    card(full_screen = TRUE, sp_map_view("map", height = "600px")),
+    card(full_screen = TRUE, sp_map_view("map", height = "78vh")),
     card(
       card_header(textOutput("bottom_title", inline = TRUE)),
       # before a fit: the input data; after a fit: the model summary
       conditionalPanel("output.has_fit == false",
-        div(style = "height:300px;overflow:auto",
+        div(style = "height:13vh;min-height:110px;overflow:auto",
             dataTableOutput("data_tbl"))),
       conditionalPanel("output.has_fit == true",
-        sp_map_summary("map"))
+        sp_map_summary("map", height = "13vh"))
     )
   ),
   tags$div(class = "text-muted small", style = "padding:2px 12px 8px",
@@ -232,6 +251,27 @@ ui <- page_sidebar(
 
 # ---- Server ------------------------------------------------------------------
 server <- function(input, output, session) {
+
+  # -- bundled worked examples (see EXAMPLE_DIR above) -------------------------
+  example_dl <- function(file) downloadHandler(
+    filename = function() file,
+    content  = function(con) {
+      src <- file.path(EXAMPLE_DIR, file)
+      if (!file.exists(src))
+        stop("bundled example not found: ", src, call. = FALSE)
+      file.copy(src, con, overwrite = TRUE)
+    })
+  output$dl_ex_samples  <- example_dl("example_samples.csv")
+  output$dl_ex_points   <- example_dl("example_points.geojson")
+  output$dl_ex_grid     <- example_dl("example_grid.csv")
+  output$dl_ex_grid_geo <- example_dl("example_grid.geojson")
+  output$dl_ex_ds       <- example_dl("example_downscale.csv")
+  output$dl_ex_ds_geo   <- example_dl("example_downscale.geojson")
+  # the point-prediction ReadMe covers both the samples and the grid, so it is
+  # offered on both rows -- one file, two output ids
+  output$dl_ex_pt_readme  <- example_dl("example_point_ReadMe.txt")
+  output$dl_ex_pt_readme2 <- example_dl("example_point_ReadMe.txt")
+  output$dl_ex_ds_readme  <- example_dl("example_downscale_ReadMe.txt")
 
   # sample input: CSV (plain) or GeoJSON (coords + EPSG auto-detected)
   sample_in <- reactive({

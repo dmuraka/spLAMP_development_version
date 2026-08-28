@@ -93,3 +93,19 @@ test_that("repeated coordinates are handled", {
   expect_true(all(is.finite(m$pred$pred)))
   expect_true(all(is.finite(as.matrix(m$beta))))
 })
+
+test_that("print() shows tables, not deparsed columns", {
+  ## same defect as print.cf_lm -- see the note there
+  hv <- quiet(cf_glm_hv(y = d$y, x = d$x, coords = d$coords))
+  m  <- quiet(cf_glm(y = d$y, x = d$x, coords = d$coords, mod_hv = hv))
+
+  out <- capture.output(print(m))
+  expect_false(any(grepl('c("', out, fixed = TRUE)))
+  ## the intercept row is labelled, as in cf_lm -- the robust and offset paths
+  ## used to hand back a beta whose first row name was blank
+  expect_equal(rownames(m$beta)[1], "Intercept")
+  expect_true(any(grepl("^Intercept ", out)))
+  expect_true(any(grepl("coef_se", out)))
+  expect_true(any(grepl("Coefficients", out)))
+  expect_true(any(grepl("Error statistics", out)))
+})
