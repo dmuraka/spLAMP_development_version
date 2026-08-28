@@ -6,6 +6,7 @@
 ^\.positai$
 ^\.claude$
 ^vignettes/.*_files$
+^spCFmap_worklog\.md$
 
 # Polyglot repo: Python port and benchmark scripts live alongside the R
 # source but must not be bundled into the R package tarball.

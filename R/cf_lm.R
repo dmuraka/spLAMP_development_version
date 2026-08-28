@@ -524,13 +524,18 @@ cf_lm        <- function(y, x=NULL, coords, x0=NULL, coords0=NULL, mod_hv,
 #' @export
 print.cf_lm <- function(x, ...)
   {
+    ## print(), not message(format()): format() on a data.frame returns a
+    ## data.frame, which message() flattens with as.character() -- printing each
+    ## column deparsed as c("...", "...") instead of a table. A print method also
+    ## belongs on stdout, where capture.output() and knitr can see it, rather
+    ## than on stderr where suppressMessages() would silence it.
     cat("Call:\n")
-    message(format(x$call))
+    print(x$call)
     cat("\n----Coefficients---------------------------------------\n")
-    message(format(x$beta))
+    print(x$beta)
     cat("\n----Standard deviations (influential elements only)----\n")
-    message(format(x$sd_summary))
+    print(x$sd_summary)
     cat("\n----Error statistics ----------------------------------\n")
-    message(format(x$e_summary))
+    print(x$e_summary)
     invisible(x)
   }

@@ -443,6 +443,7 @@ cf_dglm <- function(y, x = NULL, coords, time, offset = NULL,
                 kernel = kernel, beta_int_vmat = Vbeta, loss_hv = mod_hv$loss_hv,
                 tau = tau, tv_cols = tv_cols, q_tvc = q_tvc,
                 time = time, time0 = if (has0) time0 else NULL,
+                x = x, x0 = if (has0) x0 else NULL,
                 time_levels = lev_work, time_levels_train = lev,
                 robust_se = robust_se, se_blocks = G_block)
   result <- list(beta = beta_summ, beta_tv = beta_tv, beta_tv_sd = beta_tv_sd,

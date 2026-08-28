@@ -72,6 +72,7 @@ spCFmap <- function(mod = NULL, crs = NULL, launch = TRUE, ...) {
       warning("'crs' is ignored when 'mod' is not supplied; the full app asks ",
               "for the CRS interactively.", call. = FALSE)
     need_pkgs(c("shiny", "bslib", "leaflet", "terra", "sf", "sp"), "spCFmap()")
+    .sp_check_crs("spCFmap()")
 
     app_dir <- system.file("shiny", "spCFmap", package = "spCF")
     if (!nzchar(app_dir) || !file.exists(file.path(app_dir, "app.R")))
@@ -83,6 +84,7 @@ spCFmap <- function(mod = NULL, crs = NULL, launch = TRUE, ...) {
       stop("'crs' must be supplied when mapping a fitted model, e.g. ",
            "spCFmap(mod, crs = 4326).", call. = FALSE)
     need_pkgs(c("shiny", "leaflet", "terra", "sf"), "spCFmap(mod, crs)")
+    .sp_check_crs("spCFmap(mod, crs)")
     app <- sp_map_app(mod, crs)
   }
 

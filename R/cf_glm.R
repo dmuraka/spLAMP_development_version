@@ -550,6 +550,12 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
                                value=c(r2, rmse, mae))
 
   ######### summary outputs
+  ## label the intercept row, as cf_lm does. beta_int_summ inherits its row
+  ## names from whichever beta_int the fitting path produced, and the robust /
+  ## offset branches lose the name the initial fit carried, leaving the first
+  ## row blank in the printed table.
+  if (length(xname) == nrow(beta_int_summ)) rownames(beta_int_summ) <- xname
+
   other          <- list(n=n,n0=n0,nx=nx,y=y,x=x,x0=x0,VCmat=VCmat, #a_mod=a_mod,
                          coords=coords,coords0=coords0,vc=mod_hv$other$vc,
                          pred_pre=pred_pre, loss_hv=mod_hv$loss_hv, tau=tau)
@@ -573,13 +579,14 @@ cf_glm          <- function(y, x=NULL, coords, offset=NULL,
 #' @export
 print.cf_glm <- function(x, ...)
   {
+    ## print(), not message(format()): see the note in print.cf_lm().
     cat("Call:\n")
-    message(format(x$call))
+    print(x$call)
     cat("\n---- Coefficients -------------------------------------\n")
-    message(format(x$beta))
+    print(x$beta)
     cat("\n---- Deviance losses (influential elements only) ------\n")
-    message(format(x$sd_summary))
+    print(x$sd_summary)
     cat("\n---- Error statistics ---------------------------------\n")
-    message(format(x$e_summary))
+    print(x$e_summary)
     invisible(x)
   }

@@ -38,3 +38,7 @@ data_n*.csv
 data_rf.csv
 compare_*_out.csv
 _idtrain*.csv
+
+# Rendered vignette artifacts, and the positai working directory
+vignettes/*_files/
+.positai
