@@ -5,6 +5,9 @@ prediction, and uncertainty quantification for moderate to large datasets.
 Available as **both an R package and a Python package** sharing the same
 algorithm and reference implementation.
 
+**Try the interactive map in your browser, no installation required:**
+<https://dmuraka.shinyapps.io/spCFmap/>
+
 ## What it does
 
 Given response `y`, covariates `x`, and 2-D coordinates, spCF jointly fits a
@@ -21,7 +24,7 @@ Key features:
 - **Dynamic spatio-temporal modeling** (`cf_dglm`) designed to scale efficiently to large spatio-temporal datasets.
 - **Spatial downscaling** (`cf_downscale`) that disaggregates aggregate-level
   responses to a finer grid under a pycnophylactic (mass-preserving) constraint.
-- **Multiscale spatial feature extraction** (`sp_multiscale`) from the estimated spatial process based on user-specified bandwidth ranges.
+- **Multiscale spatial feature extraction** (`sp_scalewise`) from the estimated spatial process based on user-specified bandwidth ranges.
 - Optional **add-learn** with **random forest** or **LightGBM** that captures
   nonlinearities the linear part cannot absorb, with quantile-based predictive
   intervals (`cf_lm` only).
@@ -34,6 +37,7 @@ Key features:
 spCF/
 ├── R/, src/, man/, vignettes/   # R package source
 ├── DESCRIPTION, NAMESPACE       # R package metadata
+├── deploy/                      # Shiny deployment unit for spCFmap()
 └── python/                      # Python port (see python/README.md)
     ├── spCF/                    # importable package
     ├── examples/, tests/
@@ -100,6 +104,33 @@ mod    = spCF.cf_lm   (y=y, x=x, coords=coords, mod_hv=mod_hv)
 print(mod.beta["coef"])
 print(mod.pred["pred"][:5])
 ```
+
+## Interactive map (spCFmap)
+
+`spCFmap()` opens a Shiny application that maps a fit over a basemap: predictive
+mean and SD, the covariate effect, and any scale-wise component, with the time
+range or bandwidth range chosen interactively.
+
+A hosted instance runs at **<https://dmuraka.shinyapps.io/spCFmap/>**. It fits
+models from the bundled demo data (meuse, a space-time air-quality set, an areal
+downscaling set) or from your own CSV / GeoJSON upload; each upload box offers a
+worked example file and a ReadMe describing the columns it expects.
+
+Locally, with the R package installed:
+
+```r
+spCFmap()                 # the full app: upload data and fit inside it
+spCFmap(mod, crs = 4326)  # map a model that has already been fitted
+```
+
+`crs` is the coordinate reference system the model's coordinates are in. It has
+no default, because coordinates carry no unit of their own and guessing would
+put the map in the wrong part of the world.
+
+The hosted instance runs on a free shinyapps.io tier, whose memory is shared
+between everyone connected at once. That suits the demos and uploads of a few
+thousand observations; larger fits are better mapped locally. `deploy/` holds
+the deployment unit and its instructions.
 
 ## Public API (both languages)
 

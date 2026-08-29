@@ -11,6 +11,7 @@
 # Polyglot repo: Python port and benchmark scripts live alongside the R
 # source but must not be bundled into the R package tarball.
 ^python$
+^deploy$
 
 # Repository-level files that GitHub adds but that R CMD check warns about
 # as non-standard package contents.

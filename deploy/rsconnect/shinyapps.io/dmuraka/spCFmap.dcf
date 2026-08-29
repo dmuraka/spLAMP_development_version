@@ -1,0 +1,10 @@
+name: spCFmap
+title:
+username: dmuraka
+account: dmuraka
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17782121
+bundleId: 12480132
+url: https://dmuraka.shinyapps.io/spCFmap/
+version: 1
